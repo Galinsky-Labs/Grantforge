@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block content %}
+{% if not applicant.legal_name %}
+<div class="notice warn">Before the first run, fill in <a href="/settings">Applicant settings</a> (legal name, entity type, contact). Eligibility filtering depends on the entity type.</div>
+{% endif %}
+
+{% if pending %}
+<section class="card">
+  <h2>Waiting for your review ({{ pending|length }})</h2>
+  <table>
+    <tr><th>Opportunity</th><th>Project</th><th>Deadline</th><th>Fit</th><th>Channel</th><th></th></tr>
+    {% for m in pending %}
+    <tr>
+      <td><a href="/review/{{ m.id }}">{{ m.opportunity.title }}</a><br><small>{{ m.opportunity.funder }}</small></td>
+      <td>{{ m.project.name }}</td>
+      <td>{{ m.opportunity.close_date or '—' }}</td>
+      <td><span class="score s{{ (m.score // 10) * 10 }}">{{ m.score }}</span></td>
+      <td><span class="chip">{{ m.opportunity.submission_channel }}</span></td>
+      <td><a class="btn small" href="/review/{{ m.id }}">Review</a></td>
+    </tr>
+    {% endfor %}
+  </table>
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>Projects</h2>
+  {% if projects %}
+  <table>
+    <tr><th>Name</th><th>Status</th><th>Inputs</th><th>Matches</th><th>Created</th></tr>
+    {% for p in projects %}
+    <tr>
+      <td><a href="/projects/{{ p.id }}">{{ p.name }}</a></td>
+      <td><span class="chip">{{ p.status }}</span></td>
+      <td>{{ p.documents|length }}</td>
+      <td>{{ p.matches|selectattr('state','in',['shortlisted','drafted','notified','authorized','submitted','ready_for_manual_upload'])|list|length }}</td>
+      <td>{{ p.created_at.strftime('%Y-%m-%d') }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p>No projects yet. Create one below, then drop in everything you have about it.</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>New project</h2>
+  <form method="post" action="/projects">
+    <label>Name <input name="name" required placeholder="e.g. Potential energy harvester"></label>
+    <label>Notes (optional: anything a funder should know that is not in your documents)
+      <textarea name="notes" rows="5" placeholder="Stage, team, what the money would be used for, where the work happens…"></textarea>
+    </label>
+    <button class="btn" type="submit">Create project</button>
+  </form>
+</section>
+
+{% if jobs %}
+<section class="card">
+  <h2>Recent background jobs</h2>
+  <table>
+    <tr><th>#</th><th>Kind</th><th>Project</th><th>Status</th><th>Last progress</th></tr>
+    {% for j in jobs %}
+    <tr>
+      <td><a href="/jobs/{{ j.id }}">{{ j.id }}</a></td><td>{{ j.kind }}</td>
+      <td>{% if j.project %}<a href="/projects/{{ j.project.id }}">{{ j.project.name }}</a>{% endif %}</td>
+      <td><span class="chip {{ j.status }}">{{ j.status }}</span></td><td><small>{{ j.progress }}</small></td>
+    </tr>
+    {% endfor %}
+  </table>
+</section>
+{% endif %}
+{% endblock %}

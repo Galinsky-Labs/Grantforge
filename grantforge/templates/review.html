@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% block title %}Review – {{ o.title }}{% endblock %}
+{% block content %}
+<p><a href="/projects/{{ m.project_id }}">← {{ m.project.name }}</a></p>
+<h1>{{ (m.draft_sections or {}).get('title', 'Application') }}</h1>
+<p class="muted">For <b>{{ o.title }}</b> — {{ o.funder }} · deadline {{ o.close_date or 'not stated' }} · fit {{ m.score }}/100 · <a href="{{ o.url }}" target="_blank" rel="noopener">opportunity page ↗</a></p>
+<p><span class="chip {{ m.state }}">{{ m.state }}</span>
+{% if m.authorized_at %} authorized {{ m.authorized_at.strftime('%Y-%m-%d %H:%M UTC') }} by {{ m.authorized_by }}{% endif %}
+{% if m.submitted_at %} · submitted {{ m.submitted_at.strftime('%Y-%m-%d %H:%M UTC') }}{% endif %}</p>
+
+{% if request.query_params.get('saved') %}<div class="notice ok">Saved.</div>{% endif %}
+
+{% if m.submission_result %}
+<section class="card">
+  <h2>Submission result</h2>
+  <p><b>{{ m.submission_result.status }}</b>
+  {% if m.submission_result.test_mode %} (test mode: sent to you, intended recipient {{ m.submission_result.intended_recipient }}){% endif %}
+  {% if m.submission_result.recipient %} → {{ m.submission_result.recipient }}{% endif %}
+  {% if m.submission_result.error %}<br><span class="err">{{ m.submission_result.error }}</span>{% endif %}</p>
+  {% if m.submission_result.steps %}
+  <p>This funder has no automated submission channel. The package is complete; these are the remaining clicks:</p>
+  <ol>{% for s in m.submission_result.steps %}<li>{{ s }}</li>{% endfor %}</ol>
+  <p>Downloads: <a href="/review/{{ m.id }}/download/application.docx?t={{ t }}">application.docx</a> ·
+     <a href="/review/{{ m.id }}/download/application.md?t={{ t }}">application.md</a> ·
+     <a href="/review/{{ m.id }}/download/CHECKLIST.md?t={{ t }}">CHECKLIST.md</a> ·
+     <a href="/review/{{ m.id }}/download/SUBMIT_INSTRUCTIONS.md?t={{ t }}">SUBMIT_INSTRUCTIONS.md</a>
+     {% if o.submission_channel == 'grants_gov' %} · <a href="/review/{{ m.id }}/download/sf424_prefill.json?t={{ t }}">sf424_prefill.json</a>{% endif %}</p>
+  {% if m.state != 'submitted' %}
+  <form method="post" action="/review/{{ m.id }}/mark-submitted" class="row">
+    <input type="hidden" name="t" value="{{ t }}">
+    <label>Confirmation / tracking number <input name="confirmation" placeholder="GRANT12345678"></label>
+    <button class="btn" type="submit">I submitted it</button>
+  </form>
+  {% endif %}
+  {% endif %}
+</section>
+{% endif %}
+
+<div class="grid2">
+<section class="card">
+  <h2>Why this grant</h2>
+  <p>{{ m.rationale }}</p>
+  {% if m.blockers %}<p><b>Blockers the scorer flagged:</b></p><ul>{% for b in m.blockers %}<li>{{ b }}</li>{% endfor %}</ul>{% endif %}
+  <p><small>Award: {% if o.award_floor or o.award_ceiling %}${{ "{:,}".format(o.award_floor or 0) }} – ${{ "{:,}".format(o.award_ceiling or 0) }}{% else %}not stated{% endif %}
+  · Eligible applicants: {{ (o.applicant_types or [])|join(', ') or 'not stated' }}</small></p>
+</section>
+
+<section class="card">
+  <h2>Open questions for you ({{ (m.draft_gaps or [])|length }})</h2>
+  {% if m.draft_gaps %}
+  <ul>{% for g in m.draft_gaps %}<li>{{ g }}</li>{% endfor %}</ul>
+  <p class="muted">Answer these by editing the draft below, or add the facts to the project material and press "Redraft".</p>
+  {% else %}<p>None.</p>{% endif %}
+  <h3>Checklist</h3>
+  <ul class="checklist">
+    {% for c in m.draft_checklist or [] %}
+    <li class="{{ c.status }}">{{ c.item }} <small>— {{ c.status.replace('_',' ') }}{% if c.note %}: {{ c.note }}{% endif %}</small></li>
+    {% endfor %}
+  </ul>
+</section>
+</div>
+
+<section class="card">
+  <h2>The application</h2>
+  <div class="tabs">
+    <button class="tab active" onclick="show('preview',this)">Preview</button>
+    <button class="tab" onclick="show('edit',this)">Edit</button>
+  </div>
+  <div id="preview" class="prose">{{ m.draft_markdown|markdown|safe }}</div>
+  <form id="edit" method="post" action="/review/{{ m.id }}/save" style="display:none">
+    <input type="hidden" name="t" value="{{ t }}">
+    <textarea name="markdown_text" rows="40" class="mono">{{ m.draft_markdown }}</textarea>
+    <label>Your notes (kept with this application, never sent)<textarea name="user_notes" rows="2">{{ m.user_notes }}</textarea></label>
+    <div class="row">
+      <label>Submission channel
+        <select name="submission_channel">
+          {% for c in ['grants_gov','email','portal','unknown'] %}<option value="{{ c }}" {% if o.submission_channel==c %}selected{% endif %}>{{ c }}</option>{% endfor %}
+        </select></label>
+      <label>Submission target (funder email or portal URL) <input name="submission_target" value="{{ o.submission_target }}"></label>
+    </div>
+    <button class="btn" type="submit">Save changes</button>
+  </form>
+  <p><small>Download: <a href="/review/{{ m.id }}/download/application.docx?t={{ t }}">DOCX</a> · <a href="/review/{{ m.id }}/download/application.md?t={{ t }}">Markdown</a></small></p>
+</section>
+
+{% if m.state in ['drafted','notified','ready_for_manual_upload','failed'] %}
+<section class="card authorize">
+  <h2>Authorize submission</h2>
+  <ul class="readiness">
+    {% for c in readiness %}<li class="{{ 'ok' if c.ok else 'warn' }}">{{ c.text }}</li>{% endfor %}
+  </ul>
+  <p>Channel: <b>{{ o.submission_channel }}</b>
+    {% if o.submission_channel == 'email' %}— authorizing emails this application, with the DOCX attached, to <b>{{ o.submission_target or o.contact_email }}</b>{% if settings.submission_test_mode %} <b>(test mode is on: it will be sent to you instead)</b>{% endif %}.
+    {% elif o.submission_channel == 'grants_gov' %}— Grants.gov has no public submission API for individuals; authorizing finalises the package, pre-fills the SF-424 data and gives you the exact Workspace steps.
+    {% else %}— this funder uses a web portal; authorizing finalises the package and gives you the field-by-field steps.{% endif %}</p>
+  <form method="post" action="/review/{{ m.id }}/authorize" class="row">
+    <input type="hidden" name="t" value="{{ t }}">
+    <label>Your name <input name="authorized_by" value="{{ applicant.contact_name if applicant else '' }}"></label>
+    <label>Type <code>SUBMIT</code> to confirm <input name="confirm" autocomplete="off" required></label>
+    <button class="btn primary" type="submit">Authorize</button>
+  </form>
+  <div class="row">
+    <form method="post" action="/review/{{ m.id }}/redraft"><input type="hidden" name="t" value="{{ t }}"><button class="btn small" type="submit">Redraft from current material</button></form>
+    <form method="post" action="/review/{{ m.id }}/reject" onsubmit="return confirm('Drop this opportunity?')"><input type="hidden" name="t" value="{{ t }}"><button class="btn small danger" type="submit">Do not pursue</button></form>
+  </div>
+</section>
+{% endif %}
+
+<section class="card">
+  <details><summary>Audit trail ({{ events|length }})</summary>
+  <table>{% for e in events %}<tr><td><small>{{ e.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</small></td><td>{{ e.event }}</td><td><small>{{ e.detail or '' }}</small></td></tr>{% endfor %}</table>
+  </details>
+</section>
+
+<script>
+function show(id, btn){
+  document.getElementById('preview').style.display = id==='preview' ? '' : 'none';
+  document.getElementById('edit').style.display = id==='edit' ? '' : 'none';
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  btn.classList.add('active');
+}
+</script>
+{% endblock %}

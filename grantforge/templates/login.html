@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card narrow">
+  <h2>Sign in</h2>
+  {% if error %}<div class="notice warn">{{ error }}</div>{% endif %}
+  <form method="post" action="/login">
+    <input type="hidden" name="next" value="{{ next }}">
+    <label>Password <input type="password" name="password" autofocus></label>
+    <button class="btn primary" type="submit">Sign in</button>
+  </form>
+</section>
+{% endblock %}

@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}{{ o.title }} – GrantForge{% endblock %}
+{% block content %}
+<h1>{{ o.title }}</h1>
+<p class="muted">{{ o.funder }} · {{ o.source }} · <span class="chip">{{ o.status }}</span> · <a href="{{ o.url }}" target="_blank" rel="noopener">source page ↗</a></p>
+<section class="card">
+  <table>
+    <tr><td>Opens</td><td>{{ o.open_date or '—' }}</td></tr>
+    <tr><td>Closes</td><td>{{ o.close_date or '—' }}</td></tr>
+    <tr><td>Award</td><td>{% if o.award_floor or o.award_ceiling %}${{ "{:,}".format(o.award_floor or 0) }} – ${{ "{:,}".format(o.award_ceiling or 0) }}{% else %}not stated{% endif %}</td></tr>
+    <tr><td>Eligible applicants</td><td>{{ (o.applicant_types or [])|join(', ') or 'not stated' }}</td></tr>
+    <tr><td>Submission</td><td>{{ o.submission_channel }} {{ o.submission_target }}</td></tr>
+    <tr><td>Contact</td><td>{{ o.contact_email or '—' }}</td></tr>
+    {% if o.raw and o.raw.number %}<tr><td>Opportunity number</td><td>{{ o.raw.number }}</td></tr>{% endif %}
+  </table>
+</section>
+{% if o.eligibility_text %}<section class="card"><h2>Eligibility</h2><div class="prose">{{ o.eligibility_text|markdown|safe }}</div></section>{% endif %}
+<section class="card"><h2>Description</h2><div class="prose">{{ o.description|markdown|safe }}</div></section>
+{% if o.matches %}
+<section class="card"><h2>Matches</h2>
+<table>{% for m in o.matches %}<tr><td><a href="/projects/{{ m.project_id }}">{{ m.project.name }}</a></td><td>{{ m.score }}</td><td><span class="chip {{ m.state }}">{{ m.state }}</span></td><td>{% if m.draft_markdown %}<a href="/review/{{ m.id }}">review</a>{% endif %}</td></tr>{% endfor %}</table>
+</section>
+{% endif %}
+{% endblock %}

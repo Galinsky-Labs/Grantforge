@@ -1,0 +1,13 @@
+services:
+  grantforge:
+    build: .
+    env_file: .env
+    environment:
+      GF_DATA_DIR: /data
+    ports:
+      - "8000:8000"
+    volumes:
+      - grantforge_data:/data
+    restart: unless-stopped
+volumes:
+  grantforge_data:

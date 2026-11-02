@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Applicant settings – GrantForge{% endblock %}
+{% block content %}
+<h1>Applicant settings</h1>
+{% if request.query_params.get('saved') %}<div class="notice ok">Saved.</div>{% endif %}
+<p class="muted">Who is applying. This drives eligibility filtering (most federal grants exclude individuals and for-profits; foundations vary) and pre-fills forms. Fill it once.</p>
+<form method="post" action="/settings" class="card">
+  <div class="grid2">
+    <label>Legal name of applicant (person or organisation) <input name="legal_name" value="{{ a.legal_name }}"></label>
+    <label>Entity type
+      <select name="entity_type">
+        {% for v,l in [('individual','Individual'),('small_business','Small business (for-profit)'),('for_profit','For-profit, not a small business'),('nonprofit_501c3','Nonprofit with 501(c)(3)'),('nonprofit_other','Nonprofit without 501(c)(3)'),('university','College / university'),('government','Government'),('tribal','Tribal government / organisation')] %}
+        <option value="{{ v }}" {% if a.entity_type==v %}selected{% endif %}>{{ l }}</option>
+        {% endfor %}
+      </select></label>
+    <label>SAM.gov Unique Entity ID (UEI) <input name="uei" value="{{ a.uei }}"></label>
+    <label>EIN <input name="ein" value="{{ a.ein }}"></label>
+    <label class="inline"><input type="checkbox" name="sam_registered" {% if a.sam_registered %}checked{% endif %}> SAM.gov registration is active</label>
+    <label class="inline"><input type="checkbox" name="grants_gov_registered" {% if a.grants_gov_registered %}checked{% endif %}> Grants.gov account with AOR role exists</label>
+    <label>Contact name <input name="contact_name" value="{{ a.contact_name }}"></label>
+    <label>Contact title <input name="contact_title" value="{{ a.contact_title }}"></label>
+    <label>Contact email <input name="contact_email" value="{{ a.contact_email }}"></label>
+    <label>Contact phone <input name="contact_phone" value="{{ a.contact_phone }}"></label>
+    <label>State <input name="state" value="{{ a.state }}"></label>
+    <label>Country <input name="country" value="{{ a.country }}"></label>
+    <label>Congressional district <input name="congressional_district" value="{{ a.congressional_district }}"></label>
+    <label>Website <input name="website" value="{{ a.website }}"></label>
+  </div>
+  <label>Mailing address <textarea name="address" rows="2">{{ a.address }}</textarea></label>
+  <label>Applicant background (used in Qualifications sections: experience, prior awards, organisation history)
+    <textarea name="bio" rows="6">{{ a.bio }}</textarea></label>
+  <button class="btn primary" type="submit">Save</button>
+</form>
+
+<section class="card">
+  <h2>Federal funding prerequisites</h2>
+  <p>To receive any federal grant the applicant must hold an active SAM.gov registration (free, issues the UEI) and, to apply through Grants.gov, an account with the Authorized Organization Representative role. Both take days to weeks; start them before the first federal deadline. Individuals can register in SAM.gov as a sole proprietor, but most federal opportunities limit eligibility to organisations; the matcher filters on the entity type above so you are not shown grants you cannot win.</p>
+</section>
+
+<section class="card">
+  <h2>Environment</h2>
+  <table>
+    <tr><td>LLM</td><td>{{ settings.llm_provider }} / {{ settings.llm_model }}</td></tr>
+    <tr><td>Email backend</td><td>{{ settings.email_backend }} → {{ settings.notify_to or '(GF_NOTIFY_TO not set)' }}</td></tr>
+    <tr><td>Web-search source</td><td>{{ 'on' if settings.enable_web_search_source else 'off' }}</td></tr>
+    <tr><td>Match threshold</td><td>{{ settings.match_threshold }}</td></tr>
+    <tr><td>Submission test mode</td><td>{{ 'ON (emails go to you)' if settings.submission_test_mode else 'OFF (emails go to funders)' }}</td></tr>
+    <tr><td>Autopilot</td><td>{% if settings.autopilot_interval_hours %}every {{ settings.autopilot_interval_hours }} h{% else %}off{% endif %}</td></tr>
+  </table>
+  <p class="muted">Change these in <code>.env</code> and restart.</p>
+</section>
+{% endblock %}

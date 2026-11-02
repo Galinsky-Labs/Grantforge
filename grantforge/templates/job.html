@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Job #{{ j.id }} – GrantForge{% endblock %}
+{% block head %}{% if j.status in ['queued','running'] %}<meta http-equiv="refresh" content="5">{% endif %}{% endblock %}
+{% block content %}
+<p>{% if j.project %}<a href="/projects/{{ j.project.id }}">← {{ j.project.name }}</a>{% else %}<a href="/">← Projects</a>{% endif %}</p>
+<h1>Job #{{ j.id }} · {{ j.kind }} <span class="chip {{ j.status }}">{{ j.status }}</span></h1>
+<p class="muted">Created {{ j.created_at.strftime('%Y-%m-%d %H:%M:%S') }}{% if j.started_at %} · started {{ j.started_at.strftime('%H:%M:%S') }}{% endif %}{% if j.finished_at %} · finished {{ j.finished_at.strftime('%H:%M:%S') }}{% endif %}</p>
+{% if j.error %}<div class="notice warn"><pre>{{ j.error }}</pre></div>{% endif %}
+<pre class="log">{{ j.log }}</pre>
+{% endblock %}

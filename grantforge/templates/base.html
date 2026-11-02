@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}GrantForge{% endblock %}</title>
+<link rel="stylesheet" href="/static/style.css">
+{% block head %}{% endblock %}
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="/">GrantForge</a>
+  <nav>
+    <a href="/">Projects</a>
+    <a href="/settings">Applicant settings</a>
+  </nav>
+</header>
+<main>
+{% block content %}{% endblock %}
+</main>
+<footer>
+  <p>This product uses the Grants.gov API but is not endorsed or certified by the U.S. Department of Health and Human Services.</p>
+  <p>Nothing is ever submitted to a funder without a human pressing Authorize on its review page.</p>
+</footer>
+</body>
+</html>
