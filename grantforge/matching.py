@@ -61,6 +61,8 @@ def _parse_date(s: str) -> date | None:
 
 def hard_filter(opp: Opportunity, applicant_type: str) -> str | None:
     """Return a reason string if the opportunity is plainly out, else None."""
+    if opp.status in {"closed", "archived"}:
+        return f"opportunity status is {opp.status}"
     close = _parse_date(opp.close_date)
     if close is not None and close < date.today() + timedelta(days=settings.min_days_to_deadline):
         return f"deadline {opp.close_date} is past or within {settings.min_days_to_deadline} days"
@@ -82,6 +84,12 @@ def score_project(session: Session, project: Project, opportunities: list[Opport
     skipped = 0
     for i, opp in enumerate(opportunities, 1):
         match = session.scalar(select(Match).where(Match.project_id == project.id, Match.opportunity_id == opp.id))
+        if match is not None and match.state == "held_forecast":
+            if opp.status == "posted":
+                match.state = "shortlisted"  # the forecast has opened: draft it on this run
+                log_fn(f"  now open: '{opp.title[:60]}'")
+            results.append(match)
+            continue
         if match is not None and match.state not in {"candidate"}:
             results.append(match)  # already shortlisted/drafted/rejected: leave it alone
             continue

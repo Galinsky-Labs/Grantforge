@@ -1,8 +1,10 @@
 [project]
 name = "grantforge"
-version = "0.1.0"
+version = "0.2.0"
 description = "Reads your project material, finds matching grants, drafts the applications, and submits them after you authorize."
 requires-python = ">=3.11"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not live'"
+markers = ["live: needs the internet (Grants.gov) and, for model tests, ANTHROPIC_API_KEY; run by .github/workflows/live-tests.yml"]

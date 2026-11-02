@@ -28,6 +28,13 @@ log = logging.getLogger(__name__)
 SEARCH_URL = "https://api.grants.gov/v1/api/search2"
 FETCH_URL = "https://api.grants.gov/v1/api/fetchOpportunity"
 DETAIL_PAGE = "https://www.grants.gov/search-results-detail/{id}"
+# Attachment download endpoint used by the Grants.gov site's "Related Documents" tab.
+# Checked by the live-test workflow (tests/live/test_grants_gov_live.py).
+ATTACHMENT_URL = "https://apply07.grants.gov/grantsws/rest/opportunity/att/download/{id}"
+NOFO_NAME_HINTS = ("nofo", "foa", "rfa", "rfp", "notice", "announcement", "solicitation", "guidance",
+                   "instruction", "program", "full", "synopsis")
+FORM_NAME_HINTS = ("sf-424", "sf424", "form", "template", "checklist", "faq", "webinar", "slides")
+MAX_NOFO_CHARS = 250_000
 
 # Grants.gov "eligibilities" codes (search2 filter). Used only for reference in
 # the UI; the authoritative check is the applicant-type text on each record.
@@ -82,7 +89,7 @@ def _iso(d: str) -> str:
 
 class GrantsGovClient:
     def __init__(self, client: httpx.Client | None = None, pause: float = 0.3):
-        self._client = client or httpx.Client(timeout=30, headers={"User-Agent": "GrantForge/0.1 (+self-hosted)"})
+        self._client = client or httpx.Client(timeout=30, headers={"User-Agent": "GrantForge/0.2 (+self-hosted)"})
         self._pause = pause
 
     def search(self, keyword: str, statuses: str = "posted|forecasted", rows: int = 50, start: int = 0, **filters) -> dict:
@@ -161,8 +168,101 @@ def normalise_detail(hit: dict, detail: dict) -> RawOpportunity:
              "costSharing": syn.get("costSharing"), "numberOfAwards": syn.get("numberOfAwards"),
              "estimatedFunding": syn.get("estimatedFunding"), "fundingDescLinkUrl": syn.get("fundingDescLinkUrl"),
              "agencyContactName": syn.get("agencyContactName"), "agencyContactPhone": syn.get("agencyContactPhone"),
-             "attachments": [a.get("fileName") for folder in (detail.get("synopsisAttachmentFolders") or []) for a in (folder.get("synopsisAttachments") or [])][:30]},
+             "attachments": _attachments(detail)},
     )
+
+
+def _attachments(detail: dict) -> list[dict]:
+    out = []
+    for folder in detail.get("synopsisAttachmentFolders") or []:
+        for a in folder.get("synopsisAttachments") or []:
+            out.append({
+                "id": a.get("id"),
+                "fileName": a.get("fileName") or "",
+                "mimeType": a.get("mimeType") or "",
+                "description": a.get("fileDescription") or a.get("description") or "",
+                "folder": folder.get("folderType") or folder.get("folderName") or "",
+            })
+    return out[:40]
+
+
+def _nofo_rank(att: dict) -> int:
+    name = (att.get("fileName", "") + " " + att.get("description", "") + " " + att.get("folder", "")).lower()
+    score = 0
+    if any(h in name for h in NOFO_NAME_HINTS):
+        score += 10
+    if any(h in name for h in FORM_NAME_HINTS):
+        score -= 8
+    if name.strip().endswith(".pdf") or "pdf" in att.get("mimeType", ""):
+        score += 2
+    return score
+
+
+def download_attachment(att_id, client: httpx.Client | None = None) -> bytes:
+    own = client is None
+    client = client or httpx.Client(timeout=120, follow_redirects=True, headers={"User-Agent": "GrantForge/0.2"})
+    try:
+        r = client.get(ATTACHMENT_URL.format(id=att_id))
+        r.raise_for_status()
+        return r.content
+    finally:
+        if own:
+            client.close()
+
+
+def _bytes_to_text(name: str, data: bytes) -> str:
+    import io
+
+    lower = name.lower()
+    if data[:4] == b"%PDF" or lower.endswith(".pdf"):
+        from pypdf import PdfReader
+
+        return "\n".join((p.extract_text() or "") for p in PdfReader(io.BytesIO(data)).pages)
+    if data[:2] == b"PK" and lower.endswith(".docx"):
+        import docx
+
+        return "\n".join(p.text for p in docx.Document(io.BytesIO(data)).paragraphs)
+    if lower.endswith((".txt", ".htm", ".html")):
+        return data.decode("utf-8", errors="ignore")
+    return ""
+
+
+def fetch_nofo_text(raw: dict, log_fn=print, client: httpx.Client | None = None, max_files: int = 3) -> str:
+    """Download the funding notice and related documents for an opportunity and return their text.
+
+    Falls back to the opportunity's external "funding description" link when it has no attachments.
+    """
+    atts = sorted((raw or {}).get("attachments") or [], key=_nofo_rank, reverse=True)
+    parts: list[str] = []
+    total = 0
+    for att in atts[:max_files]:
+        if not isinstance(att, dict) or not att.get("id"):
+            continue
+        try:
+            data = download_attachment(att["id"], client)
+            text = _bytes_to_text(att.get("fileName", ""), data)
+        except Exception as exc:
+            log_fn(f"  could not read attachment {att.get('fileName')}: {exc}")
+            continue
+        if text.strip():
+            block = f"===== {att.get('fileName')} =====\n{text}"
+            parts.append(block[: MAX_NOFO_CHARS - total])
+            total += len(parts[-1])
+            log_fn(f"  read {att.get('fileName')} ({len(text):,} chars)")
+        if total >= MAX_NOFO_CHARS:
+            break
+    link = (raw or {}).get("fundingDescLinkUrl")
+    if not parts and link:
+        try:
+            from ..net import safe_get
+            from .manual_url import response_to_text
+
+            text = response_to_text(link, safe_get(link))
+            parts.append(f"===== {link} =====\n{text[:MAX_NOFO_CHARS]}")
+            log_fn(f"  read funding description link ({len(text):,} chars)")
+        except Exception as exc:
+            log_fn(f"  could not read funding description link {link}: {exc}")
+    return "\n\n".join(parts)
 
 
 class GrantsGovSource:

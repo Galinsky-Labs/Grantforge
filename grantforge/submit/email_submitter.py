@@ -28,7 +28,11 @@ def submit_by_email(match: Match, log_fn=print) -> dict:
     subject = cover.get("subject") or f"Application: {(match.draft_sections or {}).get('title', 'Grant application')}"
     body = cover.get("body") or "Please find the attached application."
     pkg = Path(match.package_dir)
-    attachments = [p for p in (pkg / "application.docx", pkg / "application.md") if p.exists()]
+    files = match.package_files or {}
+    names = [files.get("docx"), files.get("budget_csv"), *(files.get("attachments") or [])]
+    attachments = [pkg / n for n in names if n and (pkg / n).is_file()]
+    if not attachments:
+        raise RuntimeError("The application package has no files; redraft before submitting.")
 
     from ..db import SessionLocal
 

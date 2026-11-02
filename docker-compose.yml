@@ -1,13 +1,35 @@
+# Two ways to run:
+#   docker compose up -d                      -> app only, on http://localhost:8000 (local use)
+#   docker compose --profile https up -d      -> app behind Caddy with automatic HTTPS for GF_DOMAIN
 services:
   grantforge:
     build: .
     env_file: .env
     environment:
       GF_DATA_DIR: /data
+      GF_TRUST_PROXY: "${GF_TRUST_PROXY:-false}"
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"   # bound to localhost only; the public entry point is Caddy
     volumes:
       - grantforge_data:/data
     restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    profiles: ["https"]
+    depends_on: [grantforge]
+    environment:
+      GF_DOMAIN: ${GF_DOMAIN:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+
 volumes:
   grantforge_data:
+  caddy_data:
+  caddy_config:

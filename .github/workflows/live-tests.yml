@@ -1,0 +1,46 @@
+name: Live tests (Grants.gov + Claude)
+
+# Started by hand (Actions tab -> "Live tests" -> Run workflow) or by `gh workflow run live-tests.yml`.
+# The model tests need the ANTHROPIC_API_KEY repository secret; without it they are skipped and only the
+# Grants.gov checks run. A full run drafts one application and costs a small amount of API spend,
+# capped by GF_MONTHLY_BUDGET_USD below.
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Claude model id"
+        default: "claude-sonnet-5-5"
+        required: true
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GF_LIVE: "1"
+      GF_LLM_PROVIDER: anthropic
+      GF_LLM_MODEL: ${{ inputs.model }}
+      GF_MONTHLY_BUDGET_USD: "5"
+      GF_LIVE_ARTIFACTS: live-artifacts
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install OCR tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tesseract-ocr poppler-utils
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Grants.gov live checks
+        run: python -m pytest -m live tests/live/test_grants_gov_live.py -v -rs
+      - name: Model live checks (skipped without ANTHROPIC_API_KEY)
+        if: always()
+        run: python -m pytest -m live tests/live/test_model_live.py -v -rs -s
+      - name: Upload artifacts (raw API responses, the draft package, scores, spend)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-artifacts
+          path: live-artifacts/
+          retention-days: 14

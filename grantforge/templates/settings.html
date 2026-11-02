@@ -5,6 +5,7 @@
 {% if request.query_params.get('saved') %}<div class="notice ok">Saved.</div>{% endif %}
 <p class="muted">Who is applying. This drives eligibility filtering (most federal grants exclude individuals and for-profits; foundations vary) and pre-fills forms. Fill it once.</p>
 <form method="post" action="/settings" class="card">
+  {{ csrf_field(request) }}
   <div class="grid2">
     <label>Legal name of applicant (person or organisation) <input name="legal_name" value="{{ a.legal_name }}"></label>
     <label>Entity type
@@ -34,7 +35,7 @@
 
 <section class="card">
   <h2>Federal funding prerequisites</h2>
-  <p>To receive any federal grant the applicant must hold an active SAM.gov registration (free, issues the UEI) and, to apply through Grants.gov, an account with the Authorized Organization Representative role. Both take days to weeks; start them before the first federal deadline. Individuals can register in SAM.gov as a sole proprietor, but most federal opportunities limit eligibility to organisations; the matcher filters on the entity type above so you are not shown grants you cannot win.</p>
+  <p>To receive any federal grant the applicant must hold an active SAM.gov registration, which is free and issues the Unique Entity ID. Registration needs a Login.gov account, an EIN (a sole proprietor without an EIN can use an SSN), a legal name and street address that match IRS records, and a U.S. bank account. It typically takes 10 to 20 business days, and it expires after 365 days unless renewed. After SAM.gov is active, the E-Biz Point of Contact named in SAM.gov activates the organisation in Grants.gov and assigns the role that may submit applications. Most federal opportunities limit eligibility to organisations; the matcher filters on the entity type above so you are not shown grants you cannot win.</p>
 </section>
 
 <section class="card">
@@ -45,6 +46,11 @@
     <tr><td>Web-search source</td><td>{{ 'on' if settings.enable_web_search_source else 'off' }}</td></tr>
     <tr><td>Match threshold</td><td>{{ settings.match_threshold }}</td></tr>
     <tr><td>Submission test mode</td><td>{{ 'ON (emails go to you)' if settings.submission_test_mode else 'OFF (emails go to funders)' }}</td></tr>
+    <tr><td>Model spend this month</td><td>${{ "%.2f"|format(spend.spent) }}{% if spend.cap %} of ${{ "%.2f"|format(spend.cap) }} (GF_MONTHLY_BUDGET_USD){% else %} (no cap){% endif %}</td></tr>
+    <tr><td>Fact check</td><td>{{ 'on' if settings.fact_check else 'off' }}</td></tr>
+    <tr><td>Review links valid for</td><td>{{ settings.review_link_days }} days</td></tr>
+    <tr><td>Backups</td><td>daily, newest {{ settings.backup_keep }} kept in {{ settings.backup_path }}</td></tr>
+    <tr><td>Deadline reminders</td><td>{{ settings.reminder_days }} days before</td></tr>
     <tr><td>Autopilot</td><td>{% if settings.autopilot_interval_hours %}every {{ settings.autopilot_interval_hours }} h{% else %}off{% endif %}</td></tr>
   </table>
   <p class="muted">Change these in <code>.env</code> and restart.</p>

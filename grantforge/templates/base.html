@@ -3,8 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
 <title>{% block title %}GrantForge{% endblock %}</title>
 <link rel="stylesheet" href="/static/style.css">
+<script src="/static/app.js" defer></script>
 {% block head %}{% endblock %}
 </head>
 <body>
@@ -14,8 +16,14 @@
     <a href="/">Projects</a>
     <a href="/settings">Applicant settings</a>
   </nav>
+  {% if settings.ui_password %}
+  <form method="post" action="/logout" class="logout">{{ csrf_field(request) }}<button class="link" type="submit">Sign out</button></form>
+  {% endif %}
 </header>
 <main>
+{% if spend is defined and spend.over %}
+<div class="notice warn">The monthly model spend cap is reached (${{ "%.2f"|format(spend.spent) }} of ${{ "%.2f"|format(spend.cap) }}). Searching and drafting are paused until next month or until GF_MONTHLY_BUDGET_USD is raised. Review and submission still work.</div>
+{% endif %}
 {% block content %}{% endblock %}
 </main>
 <footer>

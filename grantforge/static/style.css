@@ -65,3 +65,9 @@ ul.checklist li.drafted::before { content: "✓ "; color: var(--ok); }
 ul.checklist li.needs_applicant_data::before, ul.checklist li.needs_external_document::before { content: "○ "; color: var(--warn); }
 .authorize { border-color: var(--accent); }
 details summary { cursor: pointer; }
+.warntext { color: var(--warn); }
+header.top .logout { margin-left: auto; }
+h2.inline { display: inline; }
+[hidden] { display: none !important; }
+.chip.held_forecast { color: var(--muted); }
+.chip.submitting, .chip.ready_for_manual_upload { color: var(--warn); border-color: var(--warn); }

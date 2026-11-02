@@ -4,6 +4,9 @@ from __future__ import annotations
 import io
 import json
 import logging
+import shutil
+import subprocess
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -20,8 +23,71 @@ CODE_EXTENSIONS = {
 }
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build", ".next", "target", ".idea", ".vscode", "vendor"}
 SKIP_FILES = {"package-lock.json", "yarn.lock", "pnpm-lock.yaml", "poetry.lock", "Cargo.lock", "Pipfile.lock"}
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".webp", ".bmp"}
 MAX_FILE_CHARS = 60_000
 MAX_REPO_CHARS = 400_000
+MAX_OCR_PAGES = 60
+MIN_CHARS_PER_PAGE = 80  # below this, a PDF page is treated as scanned (image only)
+
+
+def ocr_available() -> bool:
+    from ..config import settings
+
+    return settings.ocr and bool(shutil.which("tesseract")) and bool(shutil.which("pdftoppm"))
+
+
+def extract_with_warning(path: Path) -> tuple[str, str]:
+    """Extract text and return (text, warning). The warning is shown next to the file in the UI."""
+    suffix = path.suffix.lower()
+    try:
+        if suffix == ".pdf":
+            return _pdf_with_ocr(path)
+        if suffix in IMAGE_EXTENSIONS:
+            if not ocr_available():
+                return "", "Image file: text could not be read because OCR (tesseract) is not installed."
+            text = _tesseract(path)
+            return text, "" if text.strip() else "Image file: OCR found no readable text."
+        text = extract_text(path)
+        if not text.strip():
+            return "", "No readable text was found in this file; it is stored but not used."
+        return text, ""
+    except Exception as exc:
+        log.warning("Could not extract %s: %s", path, exc)
+        return "", f"Text extraction failed: {exc}"
+
+
+def _pdf_with_ocr(path: Path) -> tuple[str, str]:
+    from pypdf import PdfReader
+
+    reader = PdfReader(str(path))
+    pages = [(p.extract_text() or "") for p in reader.pages]
+    n = max(len(pages), 1)
+    text = "\n\n".join(pages)
+    if len(text.strip()) / n >= MIN_CHARS_PER_PAGE:
+        return text[:MAX_FILE_CHARS * 4], ""
+    if not ocr_available():
+        return text, ("This PDF appears to be scanned (little or no text layer) and OCR is not installed, "
+                      "so most of its content could not be read.")
+    ocr_text = _ocr_pdf(path, min(n, MAX_OCR_PAGES))
+    warning = "Text was read by OCR from a scanned PDF; check names and numbers in drafts."
+    if n > MAX_OCR_PAGES:
+        warning += f" Only the first {MAX_OCR_PAGES} of {n} pages were read."
+    return ocr_text[:MAX_FILE_CHARS * 4], warning
+
+
+def _ocr_pdf(path: Path, pages: int) -> str:
+    with tempfile.TemporaryDirectory(prefix="gf_ocr_") as tmp:
+        subprocess.run(["pdftoppm", "-r", "200", "-png", "-l", str(pages), str(path), f"{tmp}/p"],
+                       check=True, capture_output=True, timeout=600)
+        out = []
+        for img in sorted(Path(tmp).glob("p*.png")):
+            out.append(_tesseract(img))
+        return "\n\n".join(out)
+
+
+def _tesseract(image: Path) -> str:
+    r = subprocess.run(["tesseract", str(image), "stdout"], capture_output=True, timeout=300)
+    return r.stdout.decode("utf-8", errors="ignore")
 
 
 def extract_text(path: Path) -> str:

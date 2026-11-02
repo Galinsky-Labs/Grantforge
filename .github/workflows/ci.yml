@@ -1,0 +1,20 @@
+name: CI (offline tests)
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install OCR tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tesseract-ocr poppler-utils
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run tests (mock model, no network)
+        run: python -m pytest -q -rs

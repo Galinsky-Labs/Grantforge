@@ -1,8 +1,13 @@
 {% extends "base.html" %}
 {% block content %}
+{% if not settings.ui_password and settings.base_url.startswith('https') %}
+<div class="notice warn">GF_UI_PASSWORD is not set.</div>
+{% endif %}
 {% if not applicant.legal_name %}
 <div class="notice warn">Before the first run, fill in <a href="/settings">Applicant settings</a> (legal name, entity type, contact). Eligibility filtering depends on the entity type.</div>
 {% endif %}
+
+<p class="muted">Model spend this month: ${{ "%.2f"|format(spend.spent) }}{% if spend.cap %} of a ${{ "%.2f"|format(spend.cap) }} cap{% endif %}.</p>
 
 {% if pending %}
 <section class="card">
@@ -46,6 +51,7 @@
 <section class="card">
   <h2>New project</h2>
   <form method="post" action="/projects">
+    {{ csrf_field(request) }}
     <label>Name <input name="name" required placeholder="e.g. Potential energy harvester"></label>
     <label>Notes (optional: anything a funder should know that is not in your documents)
       <textarea name="notes" rows="5" placeholder="Stage, team, what the money would be used for, where the work happens…"></textarea>

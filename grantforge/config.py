@@ -49,6 +49,31 @@ class Settings:
     llm_max_tokens: int = field(default_factory=lambda: _int("GF_LLM_MAX_TOKENS", 8000))
     enable_web_search_source: bool = field(default_factory=lambda: _bool("GF_ENABLE_WEB_SEARCH_SOURCE", False))
     web_search_max_uses: int = field(default_factory=lambda: _int("GF_WEB_SEARCH_MAX_USES", 8))
+    # Verified against platform.claude.com web-search-tool docs (2026-11-01): versions 20250305 (basic),
+    # 20260209 (dynamic filtering), 20260318 (dynamic filtering + response_inclusion).
+    web_search_tool_version: str = field(default_factory=lambda: os.environ.get("GF_WEB_SEARCH_TOOL_VERSION", "web_search_20260318"))
+    section_max_tokens: int = field(default_factory=lambda: _int("GF_SECTION_MAX_TOKENS", 6000))
+    fact_check: bool = field(default_factory=lambda: _bool("GF_FACT_CHECK", True))
+    words_per_page: int = field(default_factory=lambda: _int("GF_WORDS_PER_PAGE", 500))
+
+    # --- spend control -----------------------------------------------------
+    monthly_budget_usd: float = field(default_factory=lambda: float(os.environ.get("GF_MONTHLY_BUDGET_USD", "30") or 0))
+    price_input_per_mtok: str = field(default_factory=lambda: os.environ.get("GF_PRICE_INPUT_PER_MTOK", ""))
+    price_output_per_mtok: str = field(default_factory=lambda: os.environ.get("GF_PRICE_OUTPUT_PER_MTOK", ""))
+
+    # --- security ----------------------------------------------------------
+    review_link_days: int = field(default_factory=lambda: _int("GF_REVIEW_LINK_DAYS", 14))
+    session_days: int = field(default_factory=lambda: _int("GF_SESSION_DAYS", 30))
+    max_upload_mb: int = field(default_factory=lambda: _int("GF_MAX_UPLOAD_MB", 200))
+    allow_private_urls: bool = field(default_factory=lambda: _bool("GF_ALLOW_PRIVATE_URLS", False))
+    run_worker: bool = field(default_factory=lambda: _bool("GF_RUN_WORKER", True))
+    trust_proxy: bool = field(default_factory=lambda: _bool("GF_TRUST_PROXY", False))  # true only behind the bundled Caddy
+
+    # --- operations --------------------------------------------------------
+    backup_keep: int = field(default_factory=lambda: _int("GF_BACKUP_KEEP", 14))
+    backup_dir: str = field(default_factory=lambda: os.environ.get("GF_BACKUP_DIR", ""))
+    reminder_days: str = field(default_factory=lambda: os.environ.get("GF_REMINDER_DAYS", "7,2"))
+    ocr: bool = field(default_factory=lambda: _bool("GF_OCR", True))
 
     # --- matching ----------------------------------------------------------
     match_threshold: int = field(default_factory=lambda: _int("GF_MATCH_THRESHOLD", 65))
@@ -83,6 +108,8 @@ class Settings:
         (self.data_dir / "uploads").mkdir(exist_ok=True)
         (self.data_dir / "packages").mkdir(exist_ok=True)
         (self.data_dir / "outbox").mkdir(exist_ok=True)
+        self.backup_path = Path(self.backup_dir) if self.backup_dir else self.data_dir / "backups"
+        self.backup_path.mkdir(parents=True, exist_ok=True)
         if not self.database_url:
             self.database_url = f"sqlite:///{self.data_dir / 'grantforge.db'}"
         if not self.app_secret:
@@ -93,6 +120,20 @@ class Settings:
             else:
                 self.app_secret = secrets.token_hex(32)
                 secret_file.write_text(self.app_secret)
+
+
+    @property
+    def https(self) -> bool:
+        return self.base_url.startswith("https://")
+
+    @property
+    def reminder_day_list(self) -> list[int]:
+        out = []
+        for part in self.reminder_days.split(","):
+            part = part.strip()
+            if part.isdigit():
+                out.append(int(part))
+        return sorted(set(out), reverse=True)
 
 
 settings = Settings()

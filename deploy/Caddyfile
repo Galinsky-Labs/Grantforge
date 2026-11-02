@@ -1,0 +1,9 @@
+# Caddy obtains and renews a free TLS certificate for GF_DOMAIN automatically.
+# The domain's DNS A record must point at this server, and ports 80 and 443 must be open.
+{$GF_DOMAIN} {
+	encode gzip
+	request_body {
+		max_size 1GB
+	}
+	reverse_proxy grantforge:8000
+}

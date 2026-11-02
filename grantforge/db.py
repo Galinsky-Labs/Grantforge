@@ -9,6 +9,7 @@ from sqlalchemy import (
     JSON,
     Boolean,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     String,
@@ -58,6 +59,10 @@ class Document(Base):
     text: Mapped[str] = mapped_column(Text, default="")
     char_count: Mapped[int] = mapped_column(Integer, default=0)
     summary: Mapped[str] = mapped_column(Text, default="")
+    # True = send this file with the application (CV, letter of support, budget sheet)
+    is_attachment: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    # Extraction problems the user should know about (e.g. scanned PDF without OCR)
+    warning: Mapped[str] = mapped_column(Text, default="", server_default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     project: Mapped[Project] = relationship(back_populates="documents")
@@ -86,6 +91,13 @@ class Opportunity(Base):
     submission_channel: Mapped[str] = mapped_column(String(40), default="unknown")  # grants_gov|email|portal|unknown
     submission_target: Mapped[str] = mapped_column(String(2000), default="")  # email address or portal URL
     raw: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Full text of the funding notice (NOFO) and other attachments, when downloadable
+    nofo_text: Mapped[str] = mapped_column(Text, default="", server_default="")
+    # Structured requirements extracted once from description + NOFO (sections, limits, criteria, forms)
+    requirements: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # "" (official API source) | verified | unverified | failed  -- for web-search-found opportunities
+    verification: Mapped[str] = mapped_column(String(20), default="", server_default="")
+    verification_note: Mapped[str] = mapped_column(Text, default="", server_default="")
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     matches: Mapped[list["Match"]] = relationship(back_populates="opportunity")
@@ -126,6 +138,11 @@ class Match(Base):
     draft_checklist: Mapped[list | None] = mapped_column(JSON, nullable=True)  # required forms/attachments
     draft_gaps: Mapped[list | None] = mapped_column(JSON, nullable=True)  # questions for the applicant
     package_dir: Mapped[str] = mapped_column(String(1000), default="")
+    version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")  # +1 per draft or saved edit
+    package_files: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # role -> filename of the current version
+    budget: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # SF-424A object-class budget
+    fact_check: Mapped[list | None] = mapped_column(JSON, nullable=True)  # [{section, claim, status, evidence}]
+    length_report: Mapped[list | None] = mapped_column(JSON, nullable=True)  # [{section, limit, actual, ok, rewrites}]
 
     notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     authorized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -209,6 +226,34 @@ class Job(Base):
         self.progress = line
 
 
+class LLMUsage(Base):
+    """One row per model call, for spend tracking and the monthly cap."""
+
+    __tablename__ = "llm_usage"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    task: Mapped[str] = mapped_column(String(80))
+    model: Mapped[str] = mapped_column(String(80))
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cache_write_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cache_read_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    web_searches: Mapped[int] = mapped_column(Integer, default=0)
+    cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class WebSession(Base):
+    """Login sessions: random tokens, server-side, revocable."""
+
+    __tablename__ = "web_sessions"
+
+    token: Mapped[str] = mapped_column(String(64), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    ip: Mapped[str] = mapped_column(String(64), default="")
+
+
 class AuditEvent(Base):
     __tablename__ = "audit_events"
 
@@ -243,7 +288,9 @@ SessionLocal = sessionmaker(bind=engine, expire_on_commit=False, future=True)
 
 
 def init_db() -> None:
-    Base.metadata.create_all(engine)
+    from .migrate import upgrade_to_head
+
+    upgrade_to_head(engine)
     with SessionLocal() as s:
         if s.get(ApplicantProfile, 1) is None:
             s.add(ApplicantProfile(id=1, contact_email=settings.notify_to))

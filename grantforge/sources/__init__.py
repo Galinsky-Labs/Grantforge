@@ -34,6 +34,8 @@ class RawOpportunity:
     submission_channel: str = "unknown"
     submission_target: str = ""
     raw: dict | None = None
+    verification: str = ""  # "" for official API records; verified | unverified | failed for web-found ones
+    verification_note: str = ""
 
 
 class GrantSource(Protocol):
@@ -72,8 +74,6 @@ def all_sources(settings) -> list:
     from .web_search import WebSearchSource
 
     sources: list = [GrantsGovSource()]
-    if settings.enable_web_search_source and settings.llm_provider != "mock":
+    if settings.enable_web_search_source:
         sources.append(WebSearchSource())
-    elif settings.enable_web_search_source:
-        sources.append(WebSearchSource())  # mock provider returns canned data
     return sources

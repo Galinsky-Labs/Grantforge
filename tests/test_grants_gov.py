@@ -51,7 +51,10 @@ FETCH_RESPONSE = {
             "agencyContactEmail": "grants@acl.example.gov",
             "agencyContactName": "Program Officer",
         },
-        "synopsisAttachmentFolders": [{"synopsisAttachments": [{"fileName": "NOFO.pdf"}]}],
+        "synopsisAttachmentFolders": [{"folderType": "Full Announcement", "synopsisAttachments": [
+            {"id": 9001, "fileName": "SF424_instructions_form.pdf", "mimeType": "application/pdf"},
+            {"id": 9002, "fileName": "NOFO_full_announcement.docx", "mimeType": "application/vnd.openxmlformats"},
+        ]}],
     },
 }
 
@@ -82,7 +85,8 @@ def test_normalise_detail_merges_hit_and_detail():
     assert opp.contact_email == "grants@acl.example.gov"
     assert opp.submission_channel == "grants_gov"
     assert opp.raw["number"] == "HHS-2026-ACL-TEST-0001"
-    assert opp.raw["attachments"] == ["NOFO.pdf"]
+    assert [a["id"] for a in opp.raw["attachments"]] == [9001, 9002]
+    assert opp.raw["attachments"][1]["fileName"] == "NOFO_full_announcement.docx"
 
 
 def test_source_runs_queries_and_fetches_details():
@@ -105,3 +109,33 @@ def test_forecast_record_is_marked_forecasted():
     assert opp.status == "forecasted"
     assert opp.close_date == "2027-03-01"
     assert opp.applicant_types == ["Individuals"]
+
+
+def _docx_bytes(text: str) -> bytes:
+    import io
+
+    import docx
+
+    d = docx.Document()
+    d.add_paragraph(text)
+    buf = io.BytesIO()
+    d.save(buf)
+    return buf.getvalue()
+
+
+def test_fetch_nofo_text_prefers_the_announcement_over_forms():
+    from grantforge.sources.grants_gov import fetch_nofo_text
+
+    requested = []
+
+    def transport(request: httpx.Request) -> httpx.Response:
+        requested.append(request.url.path)
+        if request.url.path.endswith("/9002"):
+            return httpx.Response(200, content=_docx_bytes("Section D. Project Narrative: 10 pages maximum."))
+        return httpx.Response(200, content=b"not a document")
+
+    client = httpx.Client(transport=httpx.MockTransport(transport))
+    opp = normalise_detail(SEARCH_RESPONSE["data"]["oppHits"][0], FETCH_RESPONSE["data"])
+    text = fetch_nofo_text(opp.raw, lambda *_: None, client=client, max_files=1)
+    assert requested == ["/grantsws/rest/opportunity/att/download/9002"]  # the announcement, not the form
+    assert "10 pages maximum" in text and "NOFO_full_announcement.docx" in text

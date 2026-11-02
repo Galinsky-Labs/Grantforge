@@ -73,10 +73,18 @@ class WebSearchSource:
                     submission_channel=it.get("submission_channel") or "unknown",
                     submission_target=it.get("submission_target") or "",
                     raw=it,
+                    verification="unverified",
+                    verification_note="Reported by web search; not yet confirmed on the funder's page.",
                 )
             )
-        log_fn(f"Web search: {len(out)} opportunities")
-        return out
+        log_fn(f"Web search: {len(out)} opportunities; re-reading each funder page to confirm details")
+        from .manual_url import verify_web_opportunity
+
+        verified = [verify_web_opportunity(item, log_fn) for item in out]
+        open_ = [v for v in verified if v.status != "closed"]
+        log_fn(f"Web search: {sum(1 for v in open_ if v.verification == 'verified')} verified open, "
+               f"{len(verified) - len(open_)} closed and dropped")
+        return open_
 
 
 def _compact_profile(profile: dict) -> str:

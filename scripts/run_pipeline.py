@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from sqlalchemy import select  # noqa: E402
 
 from grantforge.db import Document, Match, Project, SessionLocal, init_db  # noqa: E402
-from grantforge.ingest import extract_directory, extract_text, ingest_repo  # noqa: E402
+from grantforge.ingest import extract_directory, extract_with_warning, ingest_repo  # noqa: E402
 from grantforge.pipeline import run_pipeline  # noqa: E402
 
 
@@ -31,12 +31,25 @@ def main() -> int:
     ap.add_argument("--name", help="project name (created if it does not exist)")
     ap.add_argument("--notes", default="", help="free-text notes for the grant writer")
     ap.add_argument("--add", action="append", default=[], help="file, directory, zip or git URL to ingest (repeatable)")
+    ap.add_argument("--attach", action="append", default=[], help="file to ingest AND send with every application (repeatable)")
     ap.add_argument("--run", action="store_true", help="run the full pipeline after ingesting")
+    ap.add_argument("--max-drafts", type=int, help="override GF_MAX_DRAFTS_PER_RUN for this run")
+    ap.add_argument("--backup", action="store_true", help="write a backup archive now and exit")
     ap.add_argument("--rebuild-profile", action="store_true")
     ap.add_argument("--list", action="store_true", help="list projects and their matches")
     args = ap.parse_args()
 
     init_db()
+    if args.backup:
+        from grantforge.maintenance import backup
+
+        print(backup())
+        return 0
+    args.add = list(args.add) + [a for a in args.attach if a not in args.add]
+    if args.max_drafts:
+        from grantforge.config import settings
+
+        settings.max_drafts_per_run = args.max_drafts
     with SessionLocal() as s:
         if args.list:
             for p in s.scalars(select(Project)).all():
@@ -57,15 +70,17 @@ def main() -> int:
             p.notes = args.notes
         for loc in args.add:
             path = Path(loc).expanduser()
+            warning = ""
             if path.is_dir():
                 name, text, kind = path.name, extract_directory(path), "repo"
             elif path.is_file():
-                name, text, kind = path.name, extract_text(path), "file"
+                (text, warning), name, kind = extract_with_warning(path), path.name, "file"
             else:
                 name, text = ingest_repo(loc)
                 kind = "repo"
-            s.add(Document(project_id=p.id, kind=kind, name=name, path=str(loc), text=text, char_count=len(text)))
-            print(f"  added {kind} {name}: {len(text):,} chars")
+            s.add(Document(project_id=p.id, kind=kind, name=name, path=str(path.resolve()) if path.is_file() else str(loc),
+                           text=text, char_count=len(text), warning=warning, is_attachment=loc in args.attach))
+            print(f"  added {kind} {name}: {len(text):,} chars" + (f"  WARNING: {warning}" if warning else ""))
         s.commit()
         if args.run:
             result = run_pipeline(s, p, print, rebuild_profile=args.rebuild_profile)

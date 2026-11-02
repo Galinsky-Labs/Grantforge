@@ -7,30 +7,42 @@
 <div class="grid2">
 <section class="card">
   <h2>1 · Project material</h2>
-  <p class="muted">Give it everything: pitch decks, papers, READMEs, code bases, budgets, bios, letters of support. More material means better matches and better drafts.</p>
+  <p class="muted">Give it everything: pitch decks, papers, READMEs, code repositories, budgets, CVs, letters of support. More material means better matches and fewer open questions. Scanned PDFs and photos of documents are read by OCR.</p>
   {% if p.documents %}
   <table>
-    <tr><th>Input</th><th>Kind</th><th>Size</th><th></th></tr>
+    <tr><th>Input</th><th>Size</th><th title="Send this file with every application">Attach</th><th></th></tr>
     {% for d in p.documents %}
-    <tr><td>{{ d.name }}</td><td>{{ d.kind }}</td><td>{{ "{:,}".format(d.char_count) }} chars</td>
-      <td><form method="post" action="/documents/{{ d.id }}/delete" style="display:inline"><button class="link" type="submit">remove</button></form></td></tr>
+    <tr>
+      <td>{{ d.name }} <small class="muted">{{ d.kind }}</small>{% if d.warning %}<br><small class="warntext">{{ d.warning }}</small>{% endif %}</td>
+      <td><small>{{ "{:,}".format(d.char_count) }} chars</small></td>
+      <td>{% if d.kind == 'file' %}
+        <form method="post" action="/documents/{{ d.id }}/attachment">{{ csrf_field(request) }}
+          <button class="link" type="submit">{{ '✓ attached' if d.is_attachment else 'attach' }}</button></form>
+      {% endif %}</td>
+      <td><form method="post" action="/documents/{{ d.id }}/delete" data-confirm="Remove {{ d.name }}?">{{ csrf_field(request) }}<button class="link" type="submit">remove</button></form></td>
+    </tr>
     {% endfor %}
   </table>
+  <p class="muted"><small>"Attach" sends a file (CV, letter of support, budget sheet) with every application, in addition to using its text.</small></p>
   {% endif %}
   <form method="post" action="/projects/{{ p.id }}/upload" enctype="multipart/form-data">
-    <label>Upload files (PDF, DOCX, Markdown, text, code, ZIP of a code base)
+    {{ csrf_field(request) }}
+    <label>Upload files (PDF, DOCX, Markdown, text, code, images, ZIP of a code base; up to {{ settings.max_upload_mb }} MB each)
       <input type="file" name="files" multiple></label>
     <button class="btn small" type="submit">Upload</button>
   </form>
   <form method="post" action="/projects/{{ p.id }}/repo">
-    <label>Git repository URL or local path <input name="location" placeholder="https://github.com/you/project"></label>
+    {{ csrf_field(request) }}
+    <label>Git repository URL (https) <input name="location" placeholder="https://github.com/you/project"></label>
     <button class="btn small" type="submit">Add repository</button>
   </form>
   <form method="post" action="/projects/{{ p.id }}/text">
+    {{ csrf_field(request) }}
     <label>Paste text <input name="title" placeholder="Title"><textarea name="body" rows="3"></textarea></label>
     <button class="btn small" type="submit">Add text</button>
   </form>
   <form method="post" action="/projects/{{ p.id }}/notes">
+    {{ csrf_field(request) }}
     <label>Notes to the grant writer<textarea name="notes" rows="4">{{ p.notes }}</textarea></label>
     <button class="btn small" type="submit">Save notes</button>
   </form>
@@ -39,15 +51,15 @@
 <section class="card">
   <h2>2 · Run</h2>
   <form method="post" action="/projects/{{ p.id }}/run/pipeline">
-    <button class="btn primary" type="submit" {% if active %}disabled{% endif %}>Run everything</button>
+    {{ csrf_field(request) }}
+    <button class="btn primary" type="submit" {% if active or spend.over %}disabled{% endif %}>Run everything</button>
     <label class="inline"><input type="checkbox" name="rebuild" value="1"> rebuild the project profile first</label>
-    <p class="muted">Profile → search Grants.gov{% if settings.enable_web_search_source %} + web{% endif %} → score → draft the top {{ settings.max_drafts_per_run }} → email you review links.</p>
+    <p class="muted">Profile → search Grants.gov{% if settings.enable_web_search_source %} and the web{% endif %} → score → read each funding notice → draft the top {{ settings.max_drafts_per_run }} section by section → fact-check → email you review links.</p>
   </form>
   <div class="row">
-    <form method="post" action="/projects/{{ p.id }}/run/profile"><button class="btn small" {% if active %}disabled{% endif %}>Profile only</button></form>
-    <form method="post" action="/projects/{{ p.id }}/run/discover"><button class="btn small" {% if active %}disabled{% endif %}>Search + score only</button></form>
-    <form method="post" action="/projects/{{ p.id }}/run/draft"><button class="btn small" {% if active %}disabled{% endif %}>Draft shortlisted</button></form>
-    <form method="post" action="/projects/{{ p.id }}/run/notify"><button class="btn small" {% if active %}disabled{% endif %}>Re-send review email</button></form>
+    {% for kind, label in [('profile','Profile only'),('discover','Search + score only'),('draft','Draft shortlisted'),('notify','Re-send review email')] %}
+    <form method="post" action="/projects/{{ p.id }}/run/{{ kind }}">{{ csrf_field(request) }}<button class="btn small" {% if active %}disabled{% endif %}>{{ label }}</button></form>
+    {% endfor %}
   </div>
   {% if jobs %}
   <h3>Jobs</h3>
@@ -61,8 +73,9 @@
 
   <h3>Add an opportunity by hand</h3>
   <form method="post" action="/projects/{{ p.id }}/add-opportunity">
-    <label>URL of a call for proposals <input name="url" placeholder="https://foundation.org/apply"></label>
-    <label>…or paste its text if the page is behind a login<textarea name="pasted" rows="2"></textarea></label>
+    {{ csrf_field(request) }}
+    <label>URL of a call for proposals <input name="url" placeholder="https://foundation.org/apply" required></label>
+    <label>…and paste its text if the page is behind a login<textarea name="pasted" rows="2"></textarea></label>
     <button class="btn small" type="submit">Add and score</button>
   </form>
 </section>
@@ -87,12 +100,12 @@
   <tr><th>Opportunity</th><th>Deadline</th><th>Award</th><th>Fit</th><th>State</th><th>Channel</th>{% if show_actions %}<th></th>{% endif %}</tr>
   {% for m in rows %}
   <tr>
-    <td><a href="/opportunities/{{ m.opportunity.id }}">{{ m.opportunity.title }}</a><br><small>{{ m.opportunity.funder }} · {{ m.opportunity.source }}</small>
+    <td><a href="/opportunities/{{ m.opportunity.id }}">{{ m.opportunity.title }}</a><br><small>{{ m.opportunity.funder }} · {{ m.opportunity.source }}{% if m.opportunity.verification in ['unverified','failed'] %} · <span class="warntext">details not confirmed</span>{% endif %}</small>
       {% if m.rationale %}<details><summary><small>why</small></summary><small>{{ m.rationale }}{% if m.blockers %}<br><b>Blockers:</b> {{ m.blockers|join('; ') }}{% endif %}</small></details>{% endif %}</td>
     <td>{{ m.opportunity.close_date or '—' }}</td>
     <td><small>{% if m.opportunity.award_ceiling %}up to ${{ "{:,}".format(m.opportunity.award_ceiling) }}{% else %}—{% endif %}</small></td>
     <td><span class="score s{{ (m.score // 10) * 10 }}">{{ m.score }}</span></td>
-    <td><span class="chip {{ m.state }}">{{ m.state }}</span></td>
+    <td><span class="chip {{ m.state }}">{{ m.state.replace('_',' ') }}</span>{% if m.version %}<br><small>v{{ m.version }}</small>{% endif %}</td>
     <td><span class="chip">{{ m.opportunity.submission_channel }}</span></td>
     {% if show_actions %}<td>{% if m.draft_markdown %}<a class="btn small" href="/review/{{ m.id }}">Review</a>{% endif %}</td>{% endif %}
   </tr>
@@ -100,16 +113,9 @@
 </table>
 {% endmacro %}
 
-{% if groups.action %}
-<section class="card"><h2>3 · Drafts waiting for your review ({{ groups.action|length }})</h2>{{ match_table(groups.action) }}</section>
-{% endif %}
-{% if groups.authorized %}
-<section class="card"><h2>Authorized / submitted</h2>{{ match_table(groups.authorized) }}</section>
-{% endif %}
-{% if groups.shortlisted %}
-<section class="card"><h2>Shortlisted, not yet drafted ({{ groups.shortlisted|length }})</h2>{{ match_table(groups.shortlisted, False) }}</section>
-{% endif %}
-{% if groups.rejected %}
-<section class="card"><details><summary><h2 style="display:inline">Not pursued ({{ groups.rejected|length }})</h2></summary>{{ match_table(groups.rejected, False) }}</details></section>
-{% endif %}
+{% if groups.action %}<section class="card"><h2>3 · Drafts waiting for your review ({{ groups.action|length }})</h2>{{ match_table(groups.action) }}</section>{% endif %}
+{% if groups.authorized %}<section class="card"><h2>Authorized / submitted</h2>{{ match_table(groups.authorized) }}</section>{% endif %}
+{% if groups.shortlisted %}<section class="card"><h2>Shortlisted, not yet drafted ({{ groups.shortlisted|length }})</h2>{{ match_table(groups.shortlisted, False) }}</section>{% endif %}
+{% if groups.held %}<section class="card"><h2>Forecasted, held until they open ({{ groups.held|length }})</h2><p class="muted">These match but are not accepting applications yet. They are drafted automatically on the first run after they are posted.</p>{{ match_table(groups.held, False) }}</section>{% endif %}
+{% if groups.rejected %}<section class="card"><details><summary><h2 class="inline">Not pursued ({{ groups.rejected|length }})</h2></summary>{{ match_table(groups.rejected, False) }}</details></section>{% endif %}
 {% endblock %}

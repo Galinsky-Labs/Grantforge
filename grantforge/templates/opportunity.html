@@ -11,10 +11,22 @@
     <tr><td>Eligible applicants</td><td>{{ (o.applicant_types or [])|join(', ') or 'not stated' }}</td></tr>
     <tr><td>Submission</td><td>{{ o.submission_channel }} {{ o.submission_target }}</td></tr>
     <tr><td>Contact</td><td>{{ o.contact_email or '—' }}</td></tr>
+    {% if o.verification %}<tr><td>Verification</td><td>{{ o.verification }}: {{ o.verification_note }}</td></tr>{% endif %}
+    {% if o.source == 'grants_gov' %}<tr><td>Funding notice</td><td>{% if o.nofo_text %}read ({{ "{:,}".format(o.nofo_text|length) }} characters){% else %}not yet downloaded (downloaded when a draft is written){% endif %}</td></tr>{% endif %}
     {% if o.raw and o.raw.number %}<tr><td>Opportunity number</td><td>{{ o.raw.number }}</td></tr>{% endif %}
   </table>
 </section>
 {% if o.eligibility_text %}<section class="card"><h2>Eligibility</h2><div class="prose">{{ o.eligibility_text|markdown|safe }}</div></section>{% endif %}
+{% if o.requirements %}
+<section class="card"><h2>Funder requirements (extracted)</h2>
+  {% if o.requirements.sections %}<h3>Required sections</h3><ul>{% for sec in o.requirements.sections %}<li>{{ sec.heading }}{% if sec.limit %} — limit {{ sec.limit.value }} {{ sec.limit.unit }}{% endif %}</li>{% endfor %}</ul>{% endif %}
+  {% if o.requirements.review_criteria %}<h3>Review criteria</h3><ul>{% for c in o.requirements.review_criteria %}<li>{{ c }}</li>{% endfor %}</ul>{% endif %}
+  {% if o.requirements.required_forms %}<h3>Forms</h3><p>{{ o.requirements.required_forms|join(', ') }}</p>{% endif %}
+  {% if o.requirements.required_attachments %}<h3>Attachments</h3><p>{{ o.requirements.required_attachments|join(', ') }}</p>{% endif %}
+  {% if o.requirements.formatting %}<h3>Formatting</h3><p>{{ o.requirements.formatting }}</p>{% endif %}
+  {% if o.requirements.cost_sharing %}<h3>Cost sharing</h3><p>{{ o.requirements.cost_sharing }}</p>{% endif %}
+</section>
+{% endif %}
 <section class="card"><h2>Description</h2><div class="prose">{{ o.description|markdown|safe }}</div></section>
 {% if o.matches %}
 <section class="card"><h2>Matches</h2>

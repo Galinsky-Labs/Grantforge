@@ -59,6 +59,17 @@ def run_draft(session: Session, project: Project, log_fn=print, limit: int | Non
         select(Match).where(Match.project_id == project.id, Match.state == "shortlisted").order_by(Match.score.desc())
     ).all()
     drafted: list[Match] = []
+    ready = []
+    for m in shortlisted:
+        if m.opportunity.status == "forecasted":
+            # A forecast has no application package or final notice yet; draft it once it is posted.
+            m.state = "held_forecast"
+            audit(session, "held_forecast", m.id)
+            log_fn(f"Holding forecasted opportunity until it opens: '{m.opportunity.title[:60]}'")
+        else:
+            ready.append(m)
+    session.commit()
+    shortlisted = ready
     for m in shortlisted[:limit]:
         try:
             drafted.append(draft_match(session, m, log_fn))
