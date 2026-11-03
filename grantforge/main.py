@@ -14,7 +14,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from . import worker
+from . import blobstore, worker
 from .config import settings
 from .db import ApplicantProfile, AuditEvent, Document, Job, Match, Opportunity, Project, audit, get_session, init_db, utcnow
 from .drafting import update_sections_from_markdown
@@ -181,6 +181,7 @@ async def upload(project_id: int, files: list[UploadFile] = File(...), s: Sessio
                     dest.unlink(missing_ok=True)
                     raise HTTPException(413, f"{name} is larger than {settings.max_upload_mb} MB")
                 out.write(chunk)
+        blobstore.save(dest)
         text, warning = extract_with_warning(dest)
         s.add(Document(project_id=p.id, kind="file", name=dest.name, path=str(dest), text=text,
                        char_count=len(text), warning=warning))
@@ -217,6 +218,7 @@ def delete_document(doc_id: int, s: Session = Depends(get_session)):
     pid = d.project_id
     if d.path and d.kind == "file":
         Path(d.path).unlink(missing_ok=True)
+        blobstore.remove(Path(d.path))
     s.delete(d)
     s.commit()
     return RedirectResponse(f"/projects/{pid}", status_code=303)
@@ -273,18 +275,14 @@ def _load_match_for_review(match_id: int, t: str | None, request: Request, s: Se
 
 
 def _package_listing(m: Match) -> list[dict]:
-    if not m.package_dir or not Path(m.package_dir).is_dir():
+    """Listed from the database copy, so the list is complete even after the server's disk was erased."""
+    if not m.package_dir:
         return []
-    root = Path(m.package_dir)
     current = set()
     for v in (m.package_files or {}).values():
         current.update(v if isinstance(v, list) else [v])
-    out = []
-    for p in sorted(root.rglob("*"), key=lambda q: q.stat().st_mtime, reverse=True):
-        if p.is_file():
-            rel = str(p.relative_to(root))
-            out.append({"name": rel, "current": rel in current, "kb": max(1, p.stat().st_size // 1024)})
-    return out
+    rows = sorted(blobstore.list_dir(Path(m.package_dir)), key=lambda r: (r[2] is not None, r[2]), reverse=True)
+    return [{"name": name, "current": name in current, "kb": max(1, size // 1024)} for name, size, _ts in rows]
 
 
 @app.get("/review/{match_id}", response_class=HTMLResponse)
@@ -426,7 +424,7 @@ def download(match_id: int, name: str, request: Request, t: str | None = None, s
         raise HTTPException(404)
     root = Path(m.package_dir).resolve()
     path = (root / name).resolve()
-    if root not in path.parents or not path.is_file():
+    if root not in path.parents or not blobstore.ensure_local(path):
         raise HTTPException(404)
     return FileResponse(str(path), filename=path.name)
 

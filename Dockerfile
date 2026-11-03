@@ -13,6 +13,6 @@ RUN mkdir -p /data && chown grantforge:grantforge /data
 USER grantforge
 VOLUME ["/data"]
 EXPOSE 8000
-HEALTHCHECK --interval=60s --timeout=5s CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"
 # One process: the background worker runs inside it (see grantforge/worker.py).
-CMD ["uvicorn", "grantforge.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--proxy-headers", "--forwarded-allow-ips", "*"]
+# PORT is set by Render (default 10000); 8000 elsewhere.
+CMD ["sh", "-c", "exec uvicorn grantforge.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1 --proxy-headers --forwarded-allow-ips '*'"]

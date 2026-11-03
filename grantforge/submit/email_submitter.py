@@ -30,7 +30,9 @@ def submit_by_email(match: Match, log_fn=print) -> dict:
     pkg = Path(match.package_dir)
     files = match.package_files or {}
     names = [files.get("docx"), files.get("budget_csv"), *(files.get("attachments") or [])]
-    attachments = [pkg / n for n in names if n and (pkg / n).is_file()]
+    from .. import blobstore
+
+    attachments = [pkg / n for n in names if n and blobstore.ensure_local(pkg / n)]
     if not attachments:
         raise RuntimeError("The application package has no files; redraft before submitting.")
 

@@ -1,0 +1,29 @@
+# Render Blueprint for GrantForge (one Docker web service; the database is Neon).
+# Secrets are marked sync: false, so Render asks for them in the dashboard and never reads them from this file.
+services:
+  - type: web
+    name: grantforge
+    runtime: docker
+    plan: starter
+    region: ohio            # same AWS region as the Neon project (us-east-2)
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: GF_DATABASE_URL          # Neon pooled connection string
+        sync: false
+      - key: GF_DATABASE_URL_DIRECT   # Neon direct connection string (used for migrations)
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GF_UI_PASSWORD
+        sync: false
+      - key: GF_SMTP_PASSWORD
+        sync: false
+      - key: GF_APP_SECRET
+        generateValue: true
+      - key: GF_BASE_URL
+        value: https://grantforge.onrender.com
+      - key: GF_TRUST_PROXY
+        value: "true"
+      - key: GF_EMAIL_BACKEND
+        value: smtp

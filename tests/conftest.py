@@ -19,6 +19,9 @@ os.environ["GF_MIN_DAYS_TO_DEADLINE"] = "7"
 os.environ.setdefault("GF_MONTHLY_BUDGET_USD", "0")
 os.environ["GF_UI_PASSWORD"] = ""
 os.environ["GF_RUN_WORKER"] = "false"
+# CI also runs the whole suite against a real Postgres server (the same engine Neon runs).
+if os.environ.get("GF_TEST_DATABASE_URL"):
+    os.environ["GF_DATABASE_URL"] = os.environ["GF_TEST_DATABASE_URL"]
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 

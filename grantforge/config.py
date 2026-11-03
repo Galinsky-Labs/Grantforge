@@ -31,11 +31,25 @@ def _int(name: str, default: int) -> int:
         return default
 
 
+def _sqlalchemy_url(url: str) -> str:
+    """postgres:// and postgresql:// (as Neon and Render print them) -> the psycopg 3 driver."""
+    for prefix in ("postgres://", "postgresql://"):
+        if url.startswith(prefix):
+            return "postgresql+psycopg://" + url[len(prefix):]
+    return url
+
+
 @dataclass
 class Settings:
     # --- storage -----------------------------------------------------------
     data_dir: Path = field(default_factory=lambda: Path(os.environ.get("GF_DATA_DIR", ROOT / "data")))
-    database_url: str = field(default_factory=lambda: os.environ.get("GF_DATABASE_URL", ""))
+    # Render and Neon conventionally use DATABASE_URL; GF_DATABASE_URL wins if both are set.
+    database_url: str = field(default_factory=lambda: os.environ.get("GF_DATABASE_URL") or os.environ.get("DATABASE_URL", ""))
+    # Neon: the app uses the pooled URL; migrations use the direct URL (host without "-pooler").
+    database_url_direct: str = field(default_factory=lambda: os.environ.get("GF_DATABASE_URL_DIRECT", ""))
+
+    # --- port (Render sets PORT) -------------------------------------------
+    port: int = field(default_factory=lambda: _int("PORT", 8000))
 
     # --- web app -----------------------------------------------------------
     base_url: str = field(default_factory=lambda: os.environ.get("GF_BASE_URL", "http://localhost:8000").rstrip("/"))
@@ -112,6 +126,8 @@ class Settings:
         self.backup_path.mkdir(parents=True, exist_ok=True)
         if not self.database_url:
             self.database_url = f"sqlite:///{self.data_dir / 'grantforge.db'}"
+        self.database_url = _sqlalchemy_url(self.database_url)
+        self.database_url_direct = _sqlalchemy_url(self.database_url_direct) if self.database_url_direct else ""
         if not self.app_secret:
             # Persist a generated secret so review links survive restarts.
             secret_file = self.data_dir / ".app_secret"

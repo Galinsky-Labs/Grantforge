@@ -83,5 +83,8 @@ def prepare_manual(match: Match, log_fn=print) -> dict:
     files["instructions"] = f"{prefix}_SUBMIT_INSTRUCTIONS.md"
     (pkg / files["instructions"]).write_text(instructions, encoding="utf-8")
     match.package_files = files
+    from .. import blobstore
+
+    blobstore.save_many([pkg / files["instructions"]] + ([pkg / files["sf424"]] if "sf424" in files else []))
     log_fn(f"Package prepared for manual upload at {pkg}")
     return {"status": "ready_for_manual_upload", "channel": channel, "package_dir": str(pkg), "steps": steps}

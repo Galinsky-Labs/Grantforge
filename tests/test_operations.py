@@ -34,7 +34,7 @@ def test_v01_database_is_upgraded_in_place(tmp_path):
     assert "is_attachment" in {c["name"] for c in insp.get_columns("documents")}
     with eng.connect() as conn:
         assert conn.execute(text("SELECT name FROM projects")).scalar() == "Old project"
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0002"
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0003"
 
 
 def test_models_match_migrations(tmp_path):
@@ -84,6 +84,7 @@ def test_every_call_is_recorded(session):
 # Backups and reminders
 # --------------------------------------------------------------------------
 
+@pytest.mark.skipif(not settings.database_url.startswith("sqlite"), reason="SQLite archive backup only")
 def test_backup_contains_consistent_database(session, monkeypatch):
     monkeypatch.setattr(settings, "backup_keep", 2)
     session.add(Project(name="Backed up"))
@@ -206,3 +207,42 @@ def test_web_search_results_are_verified_on_the_funder_page(session, monkeypatch
     monkeypatch.setattr(manual_url, "fetch_page_text", boom)
     out = WebSearchSource().search({"project_name": "x"}, lambda *_: None)
     assert out[0].verification == "failed"
+
+
+def test_files_survive_an_erased_disk(session, tmp_path):
+    """Render erases the container disk on every deploy: packages and uploads come back from the database."""
+    import shutil
+
+    from grantforge import blobstore
+    from grantforge.db import ApplicantProfile, Document
+    from grantforge.drafting import draft_match
+    from grantforge.sources import RawOpportunity, upsert_opportunities
+    from grantforge.submit import submit_match
+
+    up = settings.data_dir / "uploads" / "99"
+    up.mkdir(parents=True, exist_ok=True)
+    (up / "cv.pdf").write_bytes(b"%PDF-1.4 cv")
+    blobstore.save(up / "cv.pdf")
+    session.get(ApplicantProfile, 1).legal_name = "X"
+    p = Project(name="P", profile={"project_name": "P"})
+    session.add(p)
+    session.flush()
+    session.add(Document(project_id=p.id, kind="file", name="cv.pdf", path=str(up / "cv.pdf"), text="cv", is_attachment=True))
+    o = upsert_opportunities(session, [RawOpportunity(source="s", source_id="z", title="Fund", status="posted",
+                                                      close_date=(date.today() + timedelta(days=40)).isoformat(),
+                                                      submission_channel="email", submission_target="f@example.org")])[0]
+    m = Match(project_id=p.id, opportunity_id=o.id, state="shortlisted")
+    session.add(m)
+    session.commit()
+    draft_match(session, m, lambda *_: None)
+
+    shutil.rmtree(m.package_dir)
+    shutil.rmtree(up)
+    names = {n for n, _s, _t in blobstore.list_dir(Path(m.package_dir))}
+    assert m.package_files["docx"] in names and "attachments/cv.pdf" in names
+
+    m.authorized_at, m.state = utcnow(), "authorized"
+    session.commit()
+    res = submit_match(session, m, lambda *_: None)
+    assert res["status"] == "submitted"
+    assert Path(m.package_dir, m.package_files["docx"]).is_file()  # restored to send it

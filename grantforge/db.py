@@ -12,6 +12,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    LargeBinary,
     String,
     Text,
     create_engine,
@@ -254,6 +255,18 @@ class WebSession(Base):
     ip: Mapped[str] = mapped_column(String(64), default="")
 
 
+class StoredFile(Base):
+    """File contents kept in the database, so uploads and application packages survive on hosts whose
+    disk is erased on every restart (Render). The local data folder is only a working copy."""
+
+    __tablename__ = "stored_files"
+
+    key: Mapped[str] = mapped_column(String(1000), primary_key=True)  # path relative to the data folder
+    content: Mapped[bytes] = mapped_column(LargeBinary)
+    size: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 class AuditEvent(Base):
     __tablename__ = "audit_events"
 
@@ -268,13 +281,21 @@ class AuditEvent(Base):
 # Engine / session helpers
 # --------------------------------------------------------------------------
 
-_connect_args: dict[str, Any] = {}
-if settings.database_url.startswith("sqlite"):
-    _connect_args = {"check_same_thread": False, "timeout": 30}
+IS_SQLITE = settings.database_url.startswith("sqlite")
 
-engine = create_engine(settings.database_url, connect_args=_connect_args, future=True)
 
-if settings.database_url.startswith("sqlite"):
+def make_engine(url: str):
+    if url.startswith("sqlite"):
+        return create_engine(url, connect_args={"check_same_thread": False, "timeout": 30}, future=True)
+    # Postgres (Neon). The app uses Neon's pooled endpoint, which runs PgBouncer in transaction mode:
+    # prepared statements are turned off, and stale connections (Neon suspends idle computes) are re-checked.
+    return create_engine(url, future=True, pool_pre_ping=True, pool_recycle=300, pool_size=5, max_overflow=5,
+                         connect_args={"prepare_threshold": None, "connect_timeout": 15})
+
+
+engine = make_engine(settings.database_url)
+
+if IS_SQLITE:
 
     @event.listens_for(engine, "connect")
     def _sqlite_pragmas(dbapi_conn, _record):  # pragma: no cover - trivial
@@ -284,13 +305,38 @@ if settings.database_url.startswith("sqlite"):
         cur.close()
 
 
+@event.listens_for(Session, "before_flush")
+def _clamp_strings(session, _flush_context, _instances):
+    """Postgres enforces VARCHAR lengths (SQLite does not). Text from funders and the model can be
+    longer than a column allows, so it is shortened to fit instead of failing the whole job."""
+    for obj in list(session.new) + list(session.dirty):
+        table = getattr(obj, "__table__", None)
+        if table is None:
+            continue
+        for col in table.columns:
+            length = getattr(col.type, "length", None)
+            if not length or not isinstance(col.type, String):
+                continue
+            value = getattr(obj, col.key, None)
+            if isinstance(value, str) and len(value) > length:
+                setattr(obj, col.key, value[:length])
+
+
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False, future=True)
 
 
 def init_db() -> None:
     from .migrate import upgrade_to_head
 
-    upgrade_to_head(engine)
+    if settings.database_url_direct and settings.database_url_direct != settings.database_url:
+        # Schema migrations need a direct (unpooled) connection.
+        direct = make_engine(settings.database_url_direct)
+        try:
+            upgrade_to_head(direct)
+        finally:
+            direct.dispose()
+    else:
+        upgrade_to_head(engine)
     with SessionLocal() as s:
         if s.get(ApplicantProfile, 1) is None:
             s.add(ApplicantProfile(id=1, contact_email=settings.notify_to))

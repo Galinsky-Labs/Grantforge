@@ -44,7 +44,13 @@ def run_daily() -> dict:
 
 def backup() -> str:
     """Write data/backups/grantforge-backup-<date>.tar.gz with a consistent database snapshot,
-    the uploads and the packages. Keeps the newest GF_BACKUP_KEEP archives."""
+    the uploads and the packages. Keeps the newest GF_BACKUP_KEEP archives.
+
+    With Postgres (Neon) the database, including every stored file, is backed up by Neon itself
+    (restore history and scheduled snapshots), so no local archive is written: on hosts such as
+    Render the local disk is erased on every restart and an archive there would be lost anyway."""
+    if not settings.database_url.startswith("sqlite"):
+        return "skipped: Postgres database is backed up by Neon (restore history and snapshots)"
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H%M")
     dest = settings.backup_path / f"grantforge-backup-{stamp}.tar.gz"
     with tempfile.TemporaryDirectory(prefix="gf_backup_") as tmp:

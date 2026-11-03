@@ -7,6 +7,22 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        database: [sqlite, postgres]
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: gf
+          POSTGRES_PASSWORD: gf
+          POSTGRES_DB: gf
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U gf" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      GF_TEST_DATABASE_URL: ${{ matrix.database == 'postgres' && 'postgresql://gf:gf@localhost:5432/gf' || '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -16,5 +32,5 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tesseract-ocr poppler-utils
       - name: Install dependencies
         run: pip install -r requirements.txt
-      - name: Run tests (mock model, no network)
+      - name: Run tests (mock model, no network) on ${{ matrix.database }}
         run: python -m pytest -q -rs

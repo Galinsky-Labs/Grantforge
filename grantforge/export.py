@@ -90,13 +90,16 @@ def write_package(match: Match, pkg_dir: Path, change: str = "draft") -> dict:
     files["checklist"] = f"{prefix}_checklist.md"
     (pkg_dir / files["checklist"]).write_text("\n".join(lines), encoding="utf-8")
 
+    from . import blobstore
+
     att_dir = pkg_dir / "attachments"
     files["attachments"] = []
     for doc in match.project.documents:
-        if doc.is_attachment and doc.path and Path(doc.path).is_file():
+        if doc.is_attachment and doc.path and blobstore.ensure_local(Path(doc.path)):
             att_dir.mkdir(exist_ok=True)
             shutil.copy2(doc.path, att_dir / Path(doc.path).name)
             files["attachments"].append(f"attachments/{Path(doc.path).name}")
+    blobstore.save_many(pkg_dir / n for k, v in files.items() for n in (v if isinstance(v, list) else [v]))
     return files
 
 
