@@ -6,7 +6,7 @@ You do three things:
 
 1. **Give it everything about the project:** documents, decks, papers, code repositories, notes, CVs and letters of support.
 2. **Review the drafted applications** when the email arrives, and press **Authorize** on the ones you want sent.
-3. **Monitor for replies.**
+3. **Wait for replies.**
 
 Everything in between is automatic. GrantForge understands the project, searches for funding, judges eligibility and fit, reads each funder's full notice, writes the application section by section, checks its claims against your material, builds the budget and attachments, and emails you a review link. Nothing is ever sent to a funder without your explicit authorization on that application's review page.
 
