@@ -1,4 +1,4 @@
-"""Database models (SQLAlchemy 2.0, SQLite by default)."""
+"""Database models (SQLAlchemy 2.0). SQLite by default; Postgres (Neon) when GF_DATABASE_URL is set."""
 from __future__ import annotations
 
 import json

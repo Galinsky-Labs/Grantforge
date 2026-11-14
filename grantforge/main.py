@@ -20,11 +20,12 @@ from .db import ApplicantProfile, AuditEvent, Document, Job, Match, Opportunity,
 from .drafting import update_sections_from_markdown
 from .ingest import extract_with_warning, ingest_repo
 from .llm import month_spend_usd
-from .notify import review_url, verify_review_token
+from .notify import review_url, send_email, verify_review_token
 from .security import (
     SESSION_COOKIE, SecurityMiddleware, client_ip, create_session, csrf_field, csrf_protect,
     delete_session, is_logged_in, login_limiter, password_missing_on_public_host, sanitize_html,
 )
+from .setup_status import blocking, setup_checks
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger(__name__)
@@ -114,9 +115,10 @@ def index(request: Request, s: Session = Depends(get_session)):
     recent_jobs = s.scalars(select(Job).order_by(Job.id.desc()).limit(8)).all()
     pending = s.scalars(select(Match).where(Match.state.in_(["drafted", "notified", "ready_for_manual_upload"]))
                         .order_by(Match.score.desc())).all()
+    applicant = s.get(ApplicantProfile, 1)
     return templates.TemplateResponse(request, "index.html", {
         "projects": projects, "jobs": recent_jobs, "pending": pending,
-        "applicant": s.get(ApplicantProfile, 1), "spend": _spend()})
+        "applicant": applicant, "spend": _spend(), "setup_missing": blocking(setup_checks(applicant))})
 
 
 @app.post("/projects", dependencies=[Depends(require_login)])
@@ -435,7 +437,21 @@ def download(match_id: int, name: str, request: Request, t: str | None = None, s
 
 @app.get("/settings", response_class=HTMLResponse, dependencies=[Depends(require_login)])
 def settings_page(request: Request, s: Session = Depends(get_session)):
-    return templates.TemplateResponse(request, "settings.html", {"a": s.get(ApplicantProfile, 1), "spend": _spend()})
+    a = s.get(ApplicantProfile, 1)
+    return templates.TemplateResponse(request, "settings.html", {"a": a, "spend": _spend(), "checks": setup_checks(a)})
+
+
+@app.post("/settings/test-email", dependencies=[Depends(require_login)])
+def settings_test_email():
+    """Send one email to GF_NOTIFY_TO, so the email settings can be checked before a real run depends on them."""
+    try:
+        result = send_email(settings.notify_to, "[GrantForge] Test email",
+                            "This is a test from GrantForge. Review links, deadline reminders and the monthly "
+                            f"spend notice will arrive at this address.\n\nDashboard: {settings.base_url}/")
+    except Exception as exc:
+        log.warning("test email failed: %s", exc)
+        return RedirectResponse("/settings?email=failed", status_code=303)
+    return RedirectResponse(f"/settings?email={result.get('backend', 'sent')}", status_code=303)
 
 
 @app.post("/settings", dependencies=[Depends(require_login)])

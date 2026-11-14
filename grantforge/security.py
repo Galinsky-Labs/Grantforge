@@ -2,6 +2,7 @@
 sanitising and security headers."""
 from __future__ import annotations
 
+import os
 import secrets
 import threading
 import time
@@ -86,9 +87,17 @@ def is_logged_in(request: Request) -> bool:
 # Login rate limiting (per client IP, in memory)
 # --------------------------------------------------------------------------
 
+GLOBAL_KEY = "*"
+
+
 class LoginLimiter:
-    def __init__(self, max_failures: int = 5, window_seconds: int = 900):
+    """Five failures per address per 15 minutes. A second, larger limit counts failures from all
+    addresses together, so the per-address limit cannot be sidestepped by rotating addresses or by
+    forging the X-Forwarded-For header in front of a proxy that passes it through."""
+
+    def __init__(self, max_failures: int = 5, window_seconds: int = 900, max_total_failures: int = 60):
         self.max_failures = max_failures
+        self.max_total_failures = max_total_failures
         self.window = window_seconds
         self._fails: dict[str, deque] = defaultdict(deque)
         self._lock = threading.Lock()
@@ -101,11 +110,14 @@ class LoginLimiter:
 
     def blocked(self, ip: str) -> bool:
         with self._lock:
-            return len(self._trim(ip)) >= self.max_failures
+            return (len(self._trim(ip)) >= self.max_failures
+                    or len(self._trim(GLOBAL_KEY)) >= self.max_total_failures)
 
     def fail(self, ip: str) -> None:
         with self._lock:
-            self._trim(ip).append(time.time())
+            now = time.time()
+            self._trim(ip).append(now)
+            self._trim(GLOBAL_KEY).append(now)
 
     def reset(self, ip: str) -> None:
         with self._lock:
@@ -116,11 +128,20 @@ login_limiter = LoginLimiter()
 
 
 def client_ip(request: Request) -> str:
-    # Behind the bundled Caddy proxy the real address is in X-Forwarded-For. The header is only
-    # trusted when GF_TRUST_PROXY=true, because a client talking to the app directly could forge it.
-    fwd = request.headers.get("x-forwarded-for", "")
-    if settings.trust_proxy and fwd:
-        return fwd.split(",")[-1].strip()
+    """The caller's address, for rate limiting and the audit trail.
+
+    Proxy headers are only read when GF_TRUST_PROXY=true, because a client talking to the app
+    directly could forge them. On Render every request arrives through Cloudflare, which overwrites
+    CF-Connecting-IP with the real client address. Behind the bundled Caddy the last
+    X-Forwarded-For entry is the address Caddy saw."""
+    if settings.trust_proxy:
+        if os.environ.get("RENDER"):
+            cf = request.headers.get("cf-connecting-ip", "").strip()
+            if cf:
+                return cf[:64]
+        fwd = request.headers.get("x-forwarded-for", "")
+        if fwd:
+            return fwd.split(",")[-1].strip()[:64]
     return request.client.host if request.client else "unknown"
 
 

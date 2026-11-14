@@ -23,8 +23,10 @@ WSDLs).  Key operations: GetOpportunityList, GetApplicationZip/SubmitApplication
 GetApplicationStatusDetail, GetSubmissionList.
 
 Set GF_GRANTS_GOV_S2S_CERT and GF_GRANTS_GOV_S2S_KEY (PEM paths) to enable the
-transport.  :func:`submit_s2s` currently builds the application zip layout and
-raises a clear error at the SOAP step so that nothing half-submitted happens.
+transport.  Until form assembly exists, :func:`submit_s2s` sends nothing to
+Grants.gov: it prepares the same complete Workspace package as the manual
+channel and records why, so an authorized application is never left failed
+or half-submitted.
 """
 from __future__ import annotations
 
@@ -58,13 +60,13 @@ def mtls_client(training: bool = True) -> httpx.Client:
 
 
 def submit_s2s(match: Match, log_fn=print) -> dict:
-    opp = match.opportunity
-    number = (opp.raw or {}).get("number")
-    log_fn(f"S2S: preparing submission for {number}")
-    # The complete, honest state of this module: the transport is ready, the
-    # form XML is not.  Fail loudly rather than pretend.
-    raise NotImplementedError(
-        "Grants.gov S2S form assembly is not implemented. The narrative package is complete in "
-        f"{match.package_dir}; submit it through Grants.gov Workspace, or extend submit_s2s() with the "
-        f"form schemas listed for opportunity {number}."
-    )
+    """Certificates are configured, but the per-form XML is not implemented, so nothing is sent
+    over S2S. The complete Workspace package (SF-424 and SF-424A prefill, steps) is prepared instead."""
+    from .manual_submitter import prepare_manual
+
+    number = (match.opportunity.raw or {}).get("number")
+    log_fn(f"S2S: certificates found, but form assembly for {number} is not implemented; "
+           "preparing the Grants.gov Workspace package instead")
+    result = prepare_manual(match, log_fn)
+    result["s2s"] = "not_used: form assembly is not implemented; submit through Grants.gov Workspace"
+    return result

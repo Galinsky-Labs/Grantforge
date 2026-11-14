@@ -16,7 +16,7 @@
     <a href="/">Projects</a>
     <a href="/settings">Applicant settings</a>
   </nav>
-  {% if settings.ui_password %}
+  {% if settings.ui_password and request.url.path != '/login' %}
   <form method="post" action="/logout" class="logout">{{ csrf_field(request) }}<button class="link" type="submit">Sign out</button></form>
   {% endif %}
 </header>

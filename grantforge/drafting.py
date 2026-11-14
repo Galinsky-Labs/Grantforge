@@ -274,7 +274,7 @@ def draft_match(session: Session, match: Match, log_fn=print) -> Match:
                 items = llm.complete_json("fact_check_section", FACT_CHECK_SYSTEM,
                                           f"SECTION: {sec['heading']}\n\n{sec['body']}",
                                           max_tokens=4000, cached_context=ctx)
-            except llm.LLMError as exc:
+            except (llm.LLMError, ValueError) as exc:
                 items = [{"claim": f"(fact check could not run: {exc})", "status": "unsupported", "evidence": ""}]
             for it in items if isinstance(items, list) else []:
                 fact_check.append({"section": sec["heading"], "claim": str(it.get("claim", "")),

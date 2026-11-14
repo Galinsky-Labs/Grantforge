@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from . import llm
 from .config import settings
-from .db import Match, Opportunity, Project, audit
+from .db import ApplicantProfile, Match, Opportunity, Project, audit
 from .ingest.profile import profile_as_text
 
 log = logging.getLogger(__name__)
@@ -77,8 +77,11 @@ def hard_filter(opp: Opportunity, applicant_type: str) -> str | None:
 
 
 def score_project(session: Session, project: Project, opportunities: list[Opportunity], log_fn=print) -> list[Match]:
-    profile = project.profile or {}
-    applicant_type = profile.get("applicant_type", "individual")
+    profile = dict(project.profile or {})
+    # The entity type in Settings is the current truth; the copy in the profile dates from when it was built.
+    applicant = session.get(ApplicantProfile, 1)
+    applicant_type = (applicant.entity_type if applicant and applicant.entity_type else None) or profile.get("applicant_type", "individual")
+    profile["applicant_type"] = applicant_type
     profile_text = profile_as_text(profile)
     results: list[Match] = []
     skipped = 0
@@ -90,7 +93,11 @@ def score_project(session: Session, project: Project, opportunities: list[Opport
                 log_fn(f"  now open: '{opp.title[:60]}'")
             results.append(match)
             continue
-        if match is not None and match.state not in {"candidate"}:
+        # A match the hard filter rejected is checked again on every run, because what excluded it can
+        # change (the applicant's entity type in Settings, a corrected deadline). Anything the model
+        # scored or the applicant dropped is left alone.
+        refilter = match is not None and match.state == "rejected" and (match.rationale or "").startswith("Filtered:")
+        if match is not None and match.state not in {"candidate"} and not refilter:
             results.append(match)  # already shortlisted/drafted/rejected: leave it alone
             continue
         if match is None:

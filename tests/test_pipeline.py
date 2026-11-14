@@ -85,6 +85,36 @@ def test_hard_filter_rules(session):
     assert "closed" in hard_filter(opp, "government")
 
 
+def test_filtered_match_is_rechecked_after_the_applicant_type_changes(session):
+    from grantforge.db import ApplicantProfile
+    from grantforge.matching import score_project
+
+    p = Project(name="P", profile={"project_name": "P", "applicant_type": "individual"})
+    opp = Opportunity(source="x", source_id="re", title="Nonprofits only", status="posted", close_date=future(60),
+                      applicant_types=["Nonprofits having a 501(c)(3) status with the IRS"])
+    session.add_all([p, opp])
+    session.commit()
+    applicant = session.get(ApplicantProfile, 1)
+    applicant.entity_type = "individual"
+    session.commit()
+    score_project(session, p, [opp], lambda _l: None)
+    m = session.query(Match).filter_by(project_id=p.id).one()
+    assert m.state == "rejected" and m.rationale.startswith("Filtered:")
+
+    applicant.entity_type = "nonprofit_501c3"  # changed in Settings; the profile still says "individual"
+    session.commit()
+    score_project(session, p, [opp], lambda _l: None)
+    session.refresh(m)
+    assert m.state == "shortlisted" and m.score == 78
+
+    m.state = "rejected"  # dropped by the applicant, or scored low by the model: never re-opened
+    m.rationale = "Not a fit."
+    session.commit()
+    score_project(session, p, [opp], lambda _l: None)
+    session.refresh(m)
+    assert m.state == "rejected"
+
+
 def test_full_pipeline_then_authorize_then_submit(session, capsys):
     p = make_project(session)
     logs = []

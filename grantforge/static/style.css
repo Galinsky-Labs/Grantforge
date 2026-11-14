@@ -71,3 +71,7 @@ h2.inline { display: inline; }
 [hidden] { display: none !important; }
 .chip.held_forecast { color: var(--muted); }
 .chip.submitting, .chip.ready_for_manual_upload { color: var(--warn); border-color: var(--warn); }
+td.status { width: 28px; font-weight: 700; text-align: center; }
+td.status.ok { color: var(--ok); }
+td.status.warn { color: var(--warn); }
+td.status.missing { color: var(--bad); }

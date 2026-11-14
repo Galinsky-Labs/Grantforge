@@ -14,6 +14,21 @@ reaches ``GF_MONTHLY_BUDGET_USD``.
 Prices are per million tokens (MTok), verified on 2026-11-01 against
 https://platform.claude.com/docs/en/about-claude/pricing . Web search costs
 $10 per 1,000 searches (platform.claude.com web-search-tool docs).
+
+How requests are shaped for the current Claude models (Sonnet 5.5, Opus 5.5,
+Haiku 5.5, Fable 5.x):
+
+* Thinking is always on and counts toward ``max_tokens``, so every request adds
+  ``GF_LLM_THINKING_HEADROOM`` tokens to the output cap the caller asked for.
+* Thinking depth is set with ``output_config.effort``: ``low`` for the many
+  small calls (summaries, scores, page parsing) and ``GF_LLM_EFFORT`` for
+  everything that writes or checks an application.
+* A model may decline a request (``stop_reason == "refusal"``). That raises
+  :class:`LLMRefused` instead of passing an empty answer on. Server-side
+  fallback to the previous model is requested where the model supports it.
+* Calls that share a ``cached_context`` send one fixed system prompt and put
+  the task's instructions after the cached block, so the plan, every section,
+  every rewrite and every fact check read the same cache entry.
 """
 from __future__ import annotations
 
@@ -38,6 +53,10 @@ class LLMTruncated(LLMError):
     """The model stopped because it hit max_tokens; the output is incomplete."""
 
 
+class LLMRefused(LLMError):
+    """The model declined the request (stop_reason "refusal")."""
+
+
 class BudgetExceeded(LLMError):
     pass
 
@@ -49,7 +68,10 @@ class BudgetExceeded(LLMError):
 # model id -> (input, output, 5-minute cache write, cache read) in USD per MTok
 PRICES: dict[str, tuple[float, float, float, float]] = {
     "claude-sonnet-5-5": (2.00, 10.00, 2.50, 0.10),
+    "claude-sonnet-5": (2.00, 10.00, 2.50, 0.20),
     "claude-opus-5-5": (4.00, 20.00, 5.00, 0.20),
+    "claude-fable-5-2": (8.00, 40.00, 10.00, 0.20),
+    "claude-mythos-5-2": (8.00, 40.00, 10.00, 0.20),
     "claude-fable-5-1": (10.00, 50.00, 12.50, 0.25),
     "claude-mythos-5-1": (10.00, 50.00, 12.50, 0.25),
 }
@@ -195,28 +217,68 @@ def parse_json(raw: str) -> Any:
 # Providers
 # --------------------------------------------------------------------------
 
+# Small, high-volume calls: little reasoning is needed, so they run at low effort.
+LIGHT_TASKS = {"summarize_document", "score_opportunity", "parse_opportunity_page"}
+# Models that accept server-side refusal fallback (beta server-side-fallback-2026-07-01, "default" routing).
+FALLBACK_MODELS = {"claude-sonnet-5-5", "claude-opus-5-5", "claude-opus-5", "claude-fable-5-2", "claude-fable-5-1"}
+FALLBACK_BETA = "server-side-fallback-2026-07-01"
+# One fixed system prompt for every call that shares a cached block. The cache key covers the system
+# prompt, so a per-task system prompt would write the same material to the cache once per task type.
+SHARED_SYSTEM = ("You help prepare grant applications. The first block of the user message is reference material. "
+                 "The instructions for this request follow it; carry them out exactly.")
+
+
+def effort_for(task: str) -> str:
+    """"low" for light tasks and JSON repairs, GF_LLM_EFFORT otherwise ("" = let the API decide)."""
+    if not settings.llm_effort:
+        return ""
+    if task.endswith(":repair") or task.split(":")[0] in LIGHT_TASKS:
+        return "low"
+    return settings.llm_effort
+
+
 class AnthropicProvider:
     MAX_CONTINUATIONS = 6  # pause_turn continuations for long web-search turns
 
-    def __init__(self) -> None:
-        if not settings.anthropic_api_key:
-            raise LLMError("ANTHROPIC_API_KEY is not set (or set GF_LLM_PROVIDER=mock for a dry run)")
+    def __init__(self, client: Any = None) -> None:
         import anthropic
 
-        self._client = anthropic.Anthropic(api_key=settings.anthropic_api_key, max_retries=0, timeout=600)
         self._anthropic = anthropic
+        if client is None:
+            if not settings.anthropic_api_key:
+                raise LLMError("ANTHROPIC_API_KEY is not set (or set GF_LLM_PROVIDER=mock for a dry run)")
+            client = anthropic.Anthropic(api_key=settings.anthropic_api_key, max_retries=0, timeout=600)
+        self._client = client
+        self._send_effort = True
+        self._send_fallbacks = settings.llm_model in FALLBACK_MODELS
 
-    def text(self, task: str, system: str, user: str, max_tokens: int, web_search: bool,
-             cached_context: str | None) -> LLMResult:
-        content: list[dict] = []
+    def build_request(self, task: str, system: str, user: str, max_tokens: int, web_search: bool,
+                      cached_context: str | None) -> dict[str, Any]:
         if cached_context:
-            content.append({"type": "text", "text": cached_context, "cache_control": {"type": "ephemeral"}})
-        content.append({"type": "text", "text": user})
-        messages: list[dict] = [{"role": "user", "content": content}]
-        kwargs: dict[str, Any] = dict(model=settings.llm_model, max_tokens=max_tokens, system=system)
+            content = [{"type": "text", "text": cached_context, "cache_control": {"type": "ephemeral"}},
+                       {"type": "text", "text": f"# INSTRUCTIONS\n{system}\n\n# REQUEST\n{user}"}]
+            system = SHARED_SYSTEM
+        else:
+            content = [{"type": "text", "text": user}]
+        kwargs: dict[str, Any] = dict(
+            model=settings.llm_model,
+            # Thinking shares the max_tokens budget with the answer, so leave room for it.
+            max_tokens=max_tokens + max(settings.llm_thinking_headroom, 0),
+            system=system,
+            messages=[{"role": "user", "content": content}],
+        )
+        effort = effort_for(task)
+        if effort and self._send_effort:
+            kwargs["output_config"] = {"effort": effort}
         if web_search:
             kwargs["tools"] = [{"type": settings.web_search_tool_version, "name": "web_search",
                                 "max_uses": settings.web_search_max_uses}]
+        return kwargs
+
+    def text(self, task: str, system: str, user: str, max_tokens: int, web_search: bool,
+             cached_context: str | None) -> LLMResult:
+        kwargs = self.build_request(task, system, user, max_tokens, web_search, cached_context)
+        messages: list[dict] = kwargs.pop("messages")
         total = Usage()
         texts: list[str] = []
         for _ in range(self.MAX_CONTINUATIONS + 1):
@@ -229,6 +291,14 @@ class AnthropicProvider:
                 cache_read_tokens=getattr(u, "cache_read_input_tokens", 0) or 0,
                 web_searches=(getattr(getattr(u, "server_tool_use", None), "web_search_requests", 0) or 0),
             ))
+            if msg.stop_reason == "refusal":
+                # Record what the declined call cost, then stop: there is no usable text to pass on.
+                _record(task, settings.llm_model, total)
+                details = getattr(msg, "stop_details", None)
+                category = getattr(details, "category", None) or "unspecified"
+                raise LLMRefused(f"The model declined the '{task}' request (category: {category}). "
+                                 "Check the material for content the model will not work with, or try another model.")
+            # A response can begin with thinking blocks; only text blocks carry the answer.
             texts.extend(b.text for b in msg.content if getattr(b, "type", "") == "text")
             if msg.stop_reason == "pause_turn":
                 # Long server-tool turn: send the paused assistant content back unchanged to continue.
@@ -237,24 +307,43 @@ class AnthropicProvider:
             return LLMResult("".join(texts), msg.stop_reason or "end_turn", total)
         return LLMResult("".join(texts), "pause_turn", total)
 
+    def _send(self, kwargs: dict[str, Any]):
+        if self._send_fallbacks:
+            return self._client.beta.messages.create(betas=[FALLBACK_BETA], fallbacks="default", **kwargs)
+        return self._client.messages.create(**kwargs)
+
     def _create(self, task: str, **kwargs):
         delay = 2.0
         retryable = (self._anthropic.RateLimitError, self._anthropic.APIConnectionError,
                      self._anthropic.InternalServerError, self._anthropic.APITimeoutError)
-        for attempt in range(5):
+        attempt = 0
+        while True:
             try:
                 t0 = time.time()
-                msg = self._client.messages.create(**kwargs)
+                msg = self._send(kwargs)
                 log.info("llm[%s] %.1fs in=%s out=%s stop=%s", task, time.time() - t0,
                          msg.usage.input_tokens, msg.usage.output_tokens, msg.stop_reason)
                 return msg
+            except self._anthropic.BadRequestError as exc:
+                # An optional parameter this model or account does not accept: drop it once and carry on.
+                text = str(exc).lower()
+                if self._send_fallbacks and "fallback" in text:
+                    log.warning("llm[%s] server-side fallback was rejected; continuing without it", task)
+                    self._send_fallbacks = False
+                    continue
+                if "output_config" in kwargs and ("effort" in text or "output_config" in text):
+                    log.warning("llm[%s] effort was rejected by %s; continuing without it", task, settings.llm_model)
+                    self._send_effort = False
+                    kwargs.pop("output_config")
+                    continue
+                raise LLMError(f"The model rejected the '{task}' request: {exc}") from exc
             except retryable as exc:
-                if attempt == 4:
+                attempt += 1
+                if attempt >= 5:
                     raise LLMError(f"LLM call failed after retries: {exc}") from exc
                 log.warning("llm[%s] transient error (%s); retrying in %.0fs", task, exc.__class__.__name__, delay)
                 time.sleep(delay)
                 delay *= 2
-        raise LLMError("unreachable")
 
 
 class MockProvider:

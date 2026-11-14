@@ -1,29 +1,53 @@
-# Render Blueprint for GrantForge (one Docker web service; the database is Neon).
-# Secrets are marked sync: false, so Render asks for them in the dashboard and never reads them from this file.
+# Render Blueprint for GrantForge: one Docker web service. The database is Neon Postgres.
+#
+# Values marked "sync: false" are secrets or personal settings. Render asks for them when the
+# Blueprint is created and never reads them from this file. README.md ("Deploy on Render with Neon")
+# says where each one comes from.
 services:
   - type: web
     name: grantforge
     runtime: docker
+    # Starter, not Free: a Free service is stopped after 15 minutes without a visitor, which stops the
+    # background worker in the middle of a run, and Free services cannot open SMTP connections.
     plan: starter
     region: ohio            # same AWS region as the Neon project (us-east-2)
     healthCheckPath: /health
     autoDeploy: true
     envVars:
-      - key: GF_DATABASE_URL          # Neon pooled connection string
+      # ----- database (Neon) -----
+      - key: GF_DATABASE_URL          # Neon pooled connection string (host contains "-pooler")
         sync: false
-      - key: GF_DATABASE_URL_DIRECT   # Neon direct connection string (used for migrations)
+      - key: GF_DATABASE_URL_DIRECT   # Neon direct connection string (used for schema migrations)
         sync: false
+      # ----- model -----
       - key: ANTHROPIC_API_KEY
         sync: false
-      - key: GF_UI_PASSWORD
+      # ----- access -----
+      - key: GF_UI_PASSWORD           # required to sign in and to Authorize
         sync: false
-      - key: GF_SMTP_PASSWORD
-        sync: false
-      - key: GF_APP_SECRET
+      - key: GF_APP_SECRET            # signs review links; generated once by Render
         generateValue: true
-      - key: GF_BASE_URL
-        value: https://grantforge.onrender.com
-      - key: GF_TRUST_PROXY
+      - key: GF_TRUST_PROXY           # Render's proxy supplies the visitor's address
         value: "true"
+      # ----- email -----
       - key: GF_EMAIL_BACKEND
         value: smtp
+      - key: GF_NOTIFY_TO             # where review links and reminders are sent
+        sync: false
+      - key: GF_EMAIL_FROM            # the From address; usually the same as GF_SMTP_USER
+        sync: false
+      - key: GF_SMTP_HOST
+        value: smtp.gmail.com
+      - key: GF_SMTP_PORT
+        value: "587"
+      - key: GF_SMTP_USER
+        sync: false
+      - key: GF_SMTP_PASSWORD         # for Gmail: an App Password, not the account password
+        sync: false
+      # ----- limits that suit a hosted instance -----
+      - key: GF_MAX_UPLOAD_MB         # uploads are stored in the database, so keep each file modest
+        value: "25"
+      - key: GF_MONTHLY_BUDGET_USD
+        value: "30"
+# GF_BASE_URL is not set here: the app uses the address Render assigns (RENDER_EXTERNAL_URL).
+# Set GF_BASE_URL only when you put a custom domain in front of the service.

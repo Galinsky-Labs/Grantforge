@@ -3,6 +3,28 @@
 {% block content %}
 <h1>Applicant settings</h1>
 {% if request.query_params.get('saved') %}<div class="notice ok">Saved.</div>{% endif %}
+{% set email = request.query_params.get('email') %}
+{% if email == 'failed' %}<div class="notice warn">The test email could not be sent. Check the GF_SMTP_* settings and the server log.</div>
+{% elif email == 'console' %}<div class="notice warn">The console email backend wrote the test email to the server's disk. It was not sent to {{ settings.notify_to }}.</div>
+{% elif email %}<div class="notice ok">Test email sent to {{ settings.notify_to }}.</div>{% endif %}
+
+<section class="card">
+  <h2>Setup status</h2>
+  <table>
+    {% for c in checks %}
+    <tr>
+      <td class="status {{ c.level }}">{{ {'ok': '✓', 'warn': '!', 'missing': '✗'}[c.level] }}</td>
+      <td>{{ c.name }}</td>
+      <td>{{ c.text }}{% if c.fix %}<br><small class="muted">{{ c.fix }}</small>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <form method="post" action="/settings/test-email" class="row">
+    {{ csrf_field(request) }}
+    <button class="btn small" type="submit" {% if not settings.notify_to %}disabled{% endif %}>Send a test email</button>
+  </form>
+  <p class="muted"><small>These come from environment variables: <code>.env</code> on your own server, or the service's Environment page on Render. The app restarts when they change.</small></p>
+</section>
 <p class="muted">Who is applying. This drives eligibility filtering (most federal grants exclude individuals and for-profits; foundations vary) and pre-fills forms. Fill it once.</p>
 <form method="post" action="/settings" class="card">
   {{ csrf_field(request) }}
@@ -49,10 +71,10 @@
     <tr><td>Model spend this month</td><td>${{ "%.2f"|format(spend.spent) }}{% if spend.cap %} of ${{ "%.2f"|format(spend.cap) }} (GF_MONTHLY_BUDGET_USD){% else %} (no cap){% endif %}</td></tr>
     <tr><td>Fact check</td><td>{{ 'on' if settings.fact_check else 'off' }}</td></tr>
     <tr><td>Review links valid for</td><td>{{ settings.review_link_days }} days</td></tr>
-    <tr><td>Backups</td><td>daily, newest {{ settings.backup_keep }} kept in {{ settings.backup_path }}</td></tr>
+    <tr><td>Backups</td><td>{% if settings.database_url.startswith('sqlite') %}daily, newest {{ settings.backup_keep }} kept in {{ settings.backup_path }}{% else %}by the Postgres host (Neon restore history and snapshots){% endif %}</td></tr>
     <tr><td>Deadline reminders</td><td>{{ settings.reminder_days }} days before</td></tr>
     <tr><td>Autopilot</td><td>{% if settings.autopilot_interval_hours %}every {{ settings.autopilot_interval_hours }} h{% else %}off{% endif %}</td></tr>
   </table>
-  <p class="muted">Change these in <code>.env</code> and restart.</p>
+  <p class="muted">Change these in <code>.env</code> (or the Render Environment page) and restart.</p>
 </section>
 {% endblock %}

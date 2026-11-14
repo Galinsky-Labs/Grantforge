@@ -89,7 +89,7 @@ def _iso(d: str) -> str:
 
 class GrantsGovClient:
     def __init__(self, client: httpx.Client | None = None, pause: float = 0.3):
-        self._client = client or httpx.Client(timeout=30, headers={"User-Agent": "GrantForge/0.2 (+self-hosted)"})
+        self._client = client or httpx.Client(timeout=30, headers={"User-Agent": "GrantForge/0.3 (+self-hosted)"})
         self._pause = pause
 
     def search(self, keyword: str, statuses: str = "posted|forecasted", rows: int = 50, start: int = 0, **filters) -> dict:
@@ -200,7 +200,7 @@ def _nofo_rank(att: dict) -> int:
 
 def download_attachment(att_id, client: httpx.Client | None = None) -> bytes:
     own = client is None
-    client = client or httpx.Client(timeout=120, follow_redirects=True, headers={"User-Agent": "GrantForge/0.2"})
+    client = client or httpx.Client(timeout=120, follow_redirects=True, headers={"User-Agent": "GrantForge/0.3"})
     try:
         r = client.get(ATTACHMENT_URL.format(id=att_id))
         r.raise_for_status()

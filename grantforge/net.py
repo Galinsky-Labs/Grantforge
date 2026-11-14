@@ -15,7 +15,7 @@ import httpx
 from .config import settings
 
 MAX_BYTES = 40 * 1024 * 1024
-USER_AGENT = "GrantForge/0.2 (+self-hosted grant application assistant)"
+USER_AGENT = "GrantForge/0.3 (+self-hosted grant application assistant)"
 
 
 class UnsafeURL(ValueError):

@@ -18,13 +18,25 @@ log = logging.getLogger(__name__)
 MARKER = "last_maintenance"
 
 
+_ran_on: str = ""  # in-memory copy of the last day maintenance ran, so the idle worker never asks the database
+
+
 def due_today() -> bool:
-    marker = settings.data_dir / f".{MARKER}"
+    """True once per calendar day. The day is recorded in the audit trail (not on local disk), so a
+    host that erases its disk on every restart (Render) does not repeat the run after each deploy."""
+    global _ran_on
     today = date.today().isoformat()
-    if marker.exists() and marker.read_text().strip() == today:
+    if _ran_on == today:
         return False
-    marker.write_text(today)
-    return True
+    tag = f"{MARKER}_{today}"
+    with SessionLocal() as s:
+        if s.scalar(select(AuditEvent).where(AuditEvent.event == tag)) is None:
+            audit(s, tag, None)
+            s.commit()
+            _ran_on = today
+            return True
+    _ran_on = today
+    return False
 
 
 def run_daily() -> dict:

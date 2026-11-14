@@ -8,6 +8,11 @@ command is the whole deployment. It also runs:
 
 Jobs are claimed with a conditional UPDATE, so even if several processes run
 a worker, each job runs once. Set GF_RUN_WORKER=false on extra web processes.
+
+The worker sleeps until :func:`enqueue` wakes it. It does not query the
+database while idle, apart from a rare safety-net check
+(GF_WORKER_POLL_SECONDS), so a serverless Postgres such as Neon can suspend
+its compute when nothing is happening instead of being kept awake all month.
 """
 from __future__ import annotations
 
@@ -20,20 +25,24 @@ from datetime import timedelta
 from sqlalchemy import select, update
 
 from .config import settings
-from .db import Job, Match, Project, SessionLocal, utcnow
+from .db import AuditEvent, Job, Match, Project, SessionLocal, audit, utcnow
 from .pipeline import run_discover, run_draft, run_notify, run_pipeline, run_profile, run_score
 from .submit import submit_match
 
 log = logging.getLogger(__name__)
 
 _stop = threading.Event()
+_wake = threading.Event()  # set by enqueue(): there may be a queued job
 STALE_AFTER = timedelta(hours=3)
+IDLE_TICK_SECONDS = 30.0  # how often the idle loop looks at the clock (no database access)
+AUTOPILOT_EVENT = "autopilot_run"
 
 
 def enqueue(session, kind: str, project_id: int | None = None, payload: dict | None = None) -> Job:
     job = Job(kind=kind, project_id=project_id, payload=payload or {})
     session.add(job)
     session.commit()
+    _wake.set()
     return job
 
 
@@ -137,25 +146,60 @@ def recover_stale_jobs(older_than: timedelta | None = STALE_AFTER) -> None:
         s.commit()
 
 
+def _last_autopilot() -> float:
+    """When autopilot last ran, read from the audit trail so a restart or redeploy does not reset the interval."""
+    with SessionLocal() as s:
+        row = s.scalar(select(AuditEvent).where(AuditEvent.event == AUTOPILOT_EVENT).order_by(AuditEvent.id.desc()).limit(1))
+    if row is None or row.created_at is None:
+        return 0.0
+    ts = row.created_at
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=utcnow().tzinfo)
+    return ts.timestamp()
+
+
+def run_autopilot() -> int:
+    """Queue a full run for every project that has a profile. Returns the number queued."""
+    with SessionLocal() as s:
+        projects = s.scalars(select(Project).where(Project.profile.is_not(None))).all()
+        for p in projects:
+            enqueue(s, "pipeline", p.id, {"autopilot": True})
+        audit(s, AUTOPILOT_EVENT, None, projects=len(projects))
+        s.commit()
+    return len(projects)
+
+
 def _loop() -> None:
     from . import maintenance
 
-    last_autopilot = time.time()
+    interval = settings.autopilot_interval_hours * 3600
+    # A first autopilot run happens one interval after the first start, not immediately on boot.
+    last_autopilot = (_last_autopilot() or time.time()) if interval > 0 else 0.0
+    last_poll = 0.0
     while not _stop.is_set():
-        job_id = claim_next_job()
-        if job_id:
-            run_job(job_id)
+        try:
+            # Look for work when something was queued in this process, and otherwise only rarely
+            # (a job queued by another process, or one that a failed claim left behind).
+            if _wake.is_set() or time.time() - last_poll >= settings.worker_poll_seconds:
+                _wake.clear()
+                last_poll = time.time()
+                job_id = claim_next_job()
+                if job_id:
+                    run_job(job_id)
+                    _wake.set()  # there may be more behind it
+                    continue
+            if maintenance.due_today():
+                log.info("daily maintenance: %s", maintenance.run_daily())
+                continue
+            if interval > 0 and time.time() - last_autopilot > interval:
+                last_autopilot = time.time()
+                log.info("autopilot: queued a run for %s project(s)", run_autopilot())
+                continue
+        except Exception:  # a database outage must not kill the worker thread
+            log.exception("worker loop error; retrying shortly")
+            _stop.wait(15.0)
             continue
-        if maintenance.due_today():
-            log.info("daily maintenance: %s", maintenance.run_daily())
-            continue
-        if settings.autopilot_interval_hours > 0 and time.time() - last_autopilot > settings.autopilot_interval_hours * 3600:
-            last_autopilot = time.time()
-            with SessionLocal() as s:
-                for p in s.scalars(select(Project).where(Project.profile.is_not(None))).all():
-                    enqueue(s, "pipeline", p.id, {"autopilot": True})
-            continue
-        _stop.wait(2.0)
+        _wake.wait(min(IDLE_TICK_SECONDS, max(settings.worker_poll_seconds, 0.2)))
 
 
 _thread: threading.Thread | None = None
@@ -167,9 +211,11 @@ def start() -> None:
         return
     recover_stale_jobs(older_than=None)
     _stop.clear()
+    _wake.set()  # pick up anything that was queued or re-queued before this start
     _thread = threading.Thread(target=_loop, name="grantforge-worker", daemon=True)
     _thread.start()
 
 
 def stop() -> None:
     _stop.set()
+    _wake.set()

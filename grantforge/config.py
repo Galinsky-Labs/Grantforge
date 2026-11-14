@@ -52,7 +52,9 @@ class Settings:
     port: int = field(default_factory=lambda: _int("PORT", 8000))
 
     # --- web app -----------------------------------------------------------
-    base_url: str = field(default_factory=lambda: os.environ.get("GF_BASE_URL", "http://localhost:8000").rstrip("/"))
+    # Render sets RENDER_EXTERNAL_URL to the service's public address; GF_BASE_URL wins when set (custom domain).
+    base_url: str = field(default_factory=lambda: (os.environ.get("GF_BASE_URL") or os.environ.get("RENDER_EXTERNAL_URL")
+                                                   or "http://localhost:8000").rstrip("/"))
     app_secret: str = field(default_factory=lambda: os.environ.get("GF_APP_SECRET", ""))
     ui_password: str = field(default_factory=lambda: os.environ.get("GF_UI_PASSWORD", ""))
 
@@ -61,6 +63,10 @@ class Settings:
     anthropic_api_key: str = field(default_factory=lambda: os.environ.get("ANTHROPIC_API_KEY", ""))
     llm_model: str = field(default_factory=lambda: os.environ.get("GF_LLM_MODEL", "claude-sonnet-5-5"))
     llm_max_tokens: int = field(default_factory=lambda: _int("GF_LLM_MAX_TOKENS", 8000))
+    # Thinking depth for planning, writing and checking: low | medium | high | xhigh | max ("" = API default).
+    llm_effort: str = field(default_factory=lambda: os.environ.get("GF_LLM_EFFORT", "medium").strip().lower())
+    # Tokens added to every request's output cap, because thinking counts toward max_tokens.
+    llm_thinking_headroom: int = field(default_factory=lambda: _int("GF_LLM_THINKING_HEADROOM", 8000))
     enable_web_search_source: bool = field(default_factory=lambda: _bool("GF_ENABLE_WEB_SEARCH_SOURCE", False))
     web_search_max_uses: int = field(default_factory=lambda: _int("GF_WEB_SEARCH_MAX_USES", 8))
     # Verified against platform.claude.com web-search-tool docs (2026-11-01): versions 20250305 (basic),
@@ -81,6 +87,9 @@ class Settings:
     max_upload_mb: int = field(default_factory=lambda: _int("GF_MAX_UPLOAD_MB", 200))
     allow_private_urls: bool = field(default_factory=lambda: _bool("GF_ALLOW_PRIVATE_URLS", False))
     run_worker: bool = field(default_factory=lambda: _bool("GF_RUN_WORKER", True))
+    # Safety-net interval at which an idle worker checks the database for jobs it was not woken for.
+    # 0 = choose by database: 2 s for SQLite, 1 hour for Postgres (so Neon can suspend when idle).
+    worker_poll_seconds: float = field(default_factory=lambda: float(os.environ.get("GF_WORKER_POLL_SECONDS", "0") or 0))
     trust_proxy: bool = field(default_factory=lambda: _bool("GF_TRUST_PROXY", False))  # true only behind the bundled Caddy
 
     # --- operations --------------------------------------------------------
@@ -127,6 +136,8 @@ class Settings:
         if not self.database_url:
             self.database_url = f"sqlite:///{self.data_dir / 'grantforge.db'}"
         self.database_url = _sqlalchemy_url(self.database_url)
+        if self.worker_poll_seconds <= 0:
+            self.worker_poll_seconds = 2.0 if self.database_url.startswith("sqlite") else 3600.0
         self.database_url_direct = _sqlalchemy_url(self.database_url_direct) if self.database_url_direct else ""
         if not self.app_secret:
             # Persist a generated secret so review links survive restarts.
