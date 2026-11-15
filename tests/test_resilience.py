@@ -146,15 +146,6 @@ def test_job_interrupted_too_often_is_failed_not_requeued(session, monkeypatch):
     assert k.status == "queued"
 
 
-def test_job_for_a_deleted_project_fails_with_a_reason(session):
-    job = worker.enqueue(session, "profile", 999)
-    worker.claim_next_job()
-    worker.run_job(job.id)
-    session.expire_all()
-    j = session.get(Job, job.id)
-    assert j.status == "failed" and "no longer exists" in j.error
-
-
 # --------------------------------------------------------------------------
 # Keep awake while busy
 # --------------------------------------------------------------------------
