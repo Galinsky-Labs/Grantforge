@@ -412,6 +412,9 @@ def review_mark_submitted(match_id: int, request: Request, t: str = Form(""), co
                           s: Session = Depends(get_session)):
     """For manual channels: the applicant records that they submitted it."""
     m = _load_match_for_review(match_id, t, request, s)
+    if m.state in {"authorized", "submitting", "submitted"}:
+        # authorized/submitting: the worker is sending it now; submitted: already recorded.
+        raise HTTPException(409, f"This application is {m.state}; it cannot be marked as submitted now.")
     m.state = "submitted"
     m.submitted_at = utcnow()
     m.submission_result = {**(m.submission_result or {}), "status": "submitted", "manual_confirmation": confirmation[:200]}

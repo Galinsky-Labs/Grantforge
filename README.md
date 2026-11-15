@@ -151,6 +151,10 @@ GrantForge refuses to serve any page at a public address until `GF_UI_PASSWORD` 
 
 Read every draft before authorizing. The model writes well, but a grant application is a representation to a funder made in your name.
 
+## Roadmap
+
+[docs/ROADMAP.md](docs/ROADMAP.md) lists what is done, what the owner still has to decide or configure, and the remaining engineering work.
+
 ## Tests
 
 ```bash
