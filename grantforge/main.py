@@ -20,7 +20,7 @@ from .db import ApplicantProfile, AuditEvent, Document, Job, Match, Opportunity,
 from .drafting import update_sections_from_markdown
 from .ingest import extract_with_warning, ingest_repo
 from .llm import month_spend_usd
-from .notify import review_url, send_email, verify_review_token
+from .notify import email_unavailable_reason, review_url, send_email, verify_review_token
 from .security import (
     SESSION_COOKIE, SecurityMiddleware, client_ip, create_session, csrf_field, csrf_protect,
     delete_session, is_logged_in, login_limiter, password_missing_on_public_host, sanitize_html,
@@ -36,6 +36,7 @@ templates.env.filters["markdown"] = lambda text: sanitize_html(md.markdown(text 
 templates.env.globals["settings"] = settings
 templates.env.globals["review_url"] = review_url
 templates.env.globals["csrf_field"] = csrf_field
+templates.env.globals["email_unavailable_reason"] = email_unavailable_reason
 
 
 @asynccontextmanager
@@ -444,6 +445,8 @@ def settings_page(request: Request, s: Session = Depends(get_session)):
 @app.post("/settings/test-email", dependencies=[Depends(require_login)])
 def settings_test_email():
     """Send one email to GF_NOTIFY_TO, so the email settings can be checked before a real run depends on them."""
+    if settings.email_backend == "smtp" and settings.hosting_plan == "free":
+        return RedirectResponse("/settings?email=unavailable", status_code=303)  # would only time out
     try:
         result = send_email(settings.notify_to, "[GrantForge] Test email",
                             "This is a test from GrantForge. Review links, deadline reminders and the monthly "

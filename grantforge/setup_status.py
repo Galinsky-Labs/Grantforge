@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 
 from .config import settings
+from .notify import smtp_missing
 from .security import is_local_only
 
 OK, WARN, MISSING = "ok", "warn", "missing"
@@ -39,22 +40,52 @@ def setup_checks(applicant=None) -> list[dict]:
                          "Set GF_NOTIFY_TO."))
     else:
         out.append(_item(OK, "Your email address", settings.notify_to))
+    free = settings.hosting_plan == "free"
+    resend_fix = ("Set GF_EMAIL_BACKEND=resend, RESEND_API_KEY and GF_EMAIL_FROM (an address on a domain verified "
+                  "in Resend); Resend sends over HTTPS.")
     if settings.email_backend == "smtp":
-        lacking = [n for n, v in (("GF_SMTP_HOST", settings.smtp_host), ("GF_SMTP_USER", settings.smtp_user),
-                                  ("GF_SMTP_PASSWORD", settings.smtp_password)) if not v]
-        if lacking:
+        lacking = smtp_missing()
+        if free:
+            out.append(_item(MISSING, "Sending email",
+                             "Email is unavailable: the Free hosting plan blocks outbound SMTP connections, so no "
+                             "review link, reminder or emailed application can be sent. Drafts still appear on the "
+                             "dashboard.",
+                             resend_fix + " Or move the service to a paid plan and set the GF_SMTP_* settings."))
+        elif lacking:
             out.append(_item(MISSING, "Sending email", "SMTP is selected but not fully configured, so no email can be sent.",
                              "Set " + ", ".join(lacking) + "."))
         else:
             out.append(_item(OK, "Sending email", f"SMTP through {settings.smtp_host}:{settings.smtp_port} as "
                                                   f"{settings.email_from or settings.smtp_user}."))
+    elif settings.email_backend == "resend":
+        lacking = [n for n, v in (("RESEND_API_KEY", settings.resend_api_key), ("GF_EMAIL_FROM", settings.email_from)) if not v]
+        if lacking:
+            out.append(_item(MISSING, "Sending email", "Resend is selected but not fully configured, so no email can be sent. "
+                             "Drafts still appear on the dashboard.", "Set " + ", ".join(lacking) + "."))
+        else:
+            out.append(_item(OK, "Sending email", f"Resend (HTTPS API) as {settings.email_from}. The sender's domain "
+                                                  "must be verified in Resend."))
+    elif settings.email_backend != "console":
+        out.append(_item(MISSING, "Sending email", f"Unknown email backend '{settings.email_backend}'.",
+                         "Set GF_EMAIL_BACKEND to smtp, resend or console."))
     elif hosted:
         out.append(_item(MISSING, "Sending email",
                          "The console backend only writes emails to the server's disk; nothing reaches your inbox.",
-                         "Set GF_EMAIL_BACKEND=smtp and the GF_SMTP_* settings."))
+                         resend_fix if free else "Set GF_EMAIL_BACKEND=smtp and the GF_SMTP_* settings, or "
+                                                 "GF_EMAIL_BACKEND=resend and RESEND_API_KEY."))
     else:
         out.append(_item(WARN, "Sending email", f"Console backend: emails are written to {settings.data_dir / 'outbox'}.",
-                         "Set GF_EMAIL_BACKEND=smtp and the GF_SMTP_* settings to send real email."))
+                         "Set GF_EMAIL_BACKEND=smtp (or resend) to send real email."))
+
+    # --- hosting plan ------------------------------------------------------
+    if free:
+        keep = (f"While a job runs, GrantForge requests its own address every {settings.keepalive_seconds} s to stay awake. "
+                if settings.keepalive_seconds > 0 else "")
+        out.append(_item(WARN, "Hosting plan",
+                         "Free plan: the server sleeps after 15 minutes without a visitor and wakes (in about a minute) "
+                         "on the next visit. " + keep + "A run that is interrupted resumes from its last finished step "
+                         "when the server wakes. Autopilot runs and deadline reminders only happen while it is awake.",
+                         "A paid plan (Render Starter) keeps the server running and allows SMTP."))
 
     # --- access ------------------------------------------------------------
     if settings.ui_password:

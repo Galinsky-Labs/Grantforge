@@ -3,6 +3,10 @@
 {% if setup_missing %}
 <div class="notice warn">Setup is not finished ({{ setup_missing|length }} item{{ 's' if setup_missing|length != 1 }}): {% for c in setup_missing %}{{ c.name }}{{ ', ' if not loop.last }}{% endfor %}. See <a href="/settings">Setup status</a> for what each one needs.</div>
 {% endif %}
+{% set email_off = email_unavailable_reason() %}
+{% if email_off %}
+<div class="notice warn">Email is unavailable: {{ email_off }}. Review links and deadline reminders are not emailed; drafts waiting for review are listed on this page.</div>
+{% endif %}
 
 <p class="muted">Model spend this month: ${{ "%.2f"|format(spend.spent) }}{% if spend.cap %} of a ${{ "%.2f"|format(spend.cap) }} cap{% endif %}.</p>
 

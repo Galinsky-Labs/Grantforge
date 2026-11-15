@@ -144,6 +144,9 @@ class Match(Base):
     budget: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # SF-424A object-class budget
     fact_check: Mapped[list | None] = mapped_column(JSON, nullable=True)  # [{section, claim, status, evidence}]
     length_report: Mapped[list | None] = mapped_column(JSON, nullable=True)  # [{section, limit, actual, ok, rewrites}]
+    # Work saved while a draft is being written (plan, finished sections, fact checks), so an interrupted
+    # draft continues from the last finished section instead of starting again. Cleared when the draft is done.
+    draft_progress: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     authorized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -215,6 +218,10 @@ class Job(Base):
     progress: Mapped[str] = mapped_column(Text, default="")
     log: Mapped[str] = mapped_column(Text, default="")
     error: Mapped[str] = mapped_column(Text, default="")
+    # Durable progress of a multi-stage job (e.g. {"done": ["profile", "discover"], "opportunity_ids": [...]}),
+    # so a run interrupted by a restart or a sleeping free instance resumes where it stopped.
+    checkpoint: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")  # times the job was started
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

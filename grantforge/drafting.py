@@ -21,12 +21,14 @@ Steps, in order:
 """
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import re
 from pathlib import Path
 
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from . import llm
 from .config import settings
@@ -226,15 +228,29 @@ def draft_match(session: Session, match: Match, log_fn=print) -> Match:
     ensure_requirements(session, opp, log_fn)
     ctx = build_context(session, match)
 
-    log_fn(f"Planning application for '{opp.title[:70]}'")
-    plan = llm.complete_json("plan_application", PLAN_SYSTEM, "Plan the application now.",
-                             max_tokens=6000, cached_context=ctx)
-    if not isinstance(plan, dict) or not plan.get("sections"):
-        raise RuntimeError("The planning step returned no sections")
+    # Resume a draft that an earlier, interrupted run had started on this same version.
+    progress = match.draft_progress if isinstance(match.draft_progress, dict) else None
+    if progress and (progress.get("base_version") != (match.version or 0) or not isinstance(progress.get("plan"), dict)):
+        progress = None
+    if progress:
+        plan = progress["plan"]
+        log_fn(f"Resuming the draft of '{opp.title[:70]}': {len(progress.get('sections') or [])} of "
+               f"{len(plan.get('sections') or [])} sections were already written")
+    else:
+        log_fn(f"Planning application for '{opp.title[:70]}'")
+        plan = llm.complete_json("plan_application", PLAN_SYSTEM, "Plan the application now.",
+                                 max_tokens=6000, cached_context=ctx)
+        if not isinstance(plan, dict) or not plan.get("sections"):
+            raise RuntimeError("The planning step returned no sections")
+        progress = {"base_version": match.version or 0, "plan": plan, "sections": [], "length_report": [],
+                    "fact_check": [], "fact_checked": 0}
+        _save_progress(session, match, progress)
 
-    sections: list[dict] = []
-    length_report: list[dict] = []
+    sections: list[dict] = list(progress.get("sections") or [])
+    length_report: list[dict] = list(progress.get("length_report") or [])
     for i, sec in enumerate(plan["sections"], 1):
+        if i <= len(sections):
+            continue  # written before the interruption
         heading = str(sec.get("heading") or f"Section {i}")
         limit = sec.get("limit") if isinstance(sec.get("limit"), dict) else None
         log_fn(f"  writing section {i}/{len(plan['sections'])}: {heading}")
@@ -257,6 +273,8 @@ def draft_match(session: Session, match: Match, log_fn=print) -> Match:
                                   "actual": actual, "ok": not over, "rewrites": rewrites,
                                   "estimated": limit.get("unit") == "pages"})
         sections.append({"heading": heading, "body": body})
+        progress.update(sections=sections, length_report=length_report)
+        _save_progress(session, match, progress)
 
     budget = compute_budget(plan.get("budget") or {})
     gaps = [str(g) for g in plan.get("gaps") or []]
@@ -266,9 +284,11 @@ def draft_match(session: Session, match: Match, log_fn=print) -> Match:
                     f"${budget['total']:,}; the budget total is used. Adjust the budget if this is wrong.")
     requested = budget["total"] or requested
 
-    fact_check: list[dict] = []
+    fact_check: list[dict] = list(progress.get("fact_check") or [])
     if settings.fact_check:
-        for sec in sections:
+        for n, sec in enumerate(sections):
+            if n < int(progress.get("fact_checked") or 0):
+                continue  # checked before the interruption
             log_fn(f"  fact-checking: {sec['heading']}")
             try:
                 items = llm.complete_json("fact_check_section", FACT_CHECK_SYSTEM,
@@ -279,6 +299,8 @@ def draft_match(session: Session, match: Match, log_fn=print) -> Match:
             for it in items if isinstance(items, list) else []:
                 fact_check.append({"section": sec["heading"], "claim": str(it.get("claim", "")),
                                    "status": str(it.get("status", "unsupported")), "evidence": str(it.get("evidence", ""))})
+            progress.update(fact_check=fact_check, fact_checked=n + 1)
+            _save_progress(session, match, progress)
 
     checklist = list(plan.get("checklist") or [])
     req = opp.requirements or {}
@@ -317,6 +339,7 @@ def draft_match(session: Session, match: Match, log_fn=print) -> Match:
     match.draft_gaps = _merge_gaps(gaps, match.draft_markdown)
     match.version = (match.version or 0) + 1
     match.state = "drafted"
+    match.draft_progress = None
     session.commit()
 
     pkg_dir = settings.data_dir / "packages" / f"match_{match.id}"
@@ -329,6 +352,13 @@ def draft_match(session: Session, match: Match, log_fn=print) -> Match:
     log_fn(f"  draft v{match.version} complete: {len(sections)} sections, {len(match.draft_gaps)} open questions, "
            f"{unsupported} claims not found in your material")
     return match
+
+
+def _save_progress(session: Session, match: Match, progress: dict) -> None:
+    """Commit the draft's progress so far; a restarted worker continues from here."""
+    match.draft_progress = copy.deepcopy(progress)
+    flag_modified(match, "draft_progress")
+    session.commit()
 
 
 def _write_section(heading: str, brief: str, limit: dict | None, written: list[dict], ctx: str) -> str:
