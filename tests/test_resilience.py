@@ -278,3 +278,94 @@ def test_dashboard_says_email_is_unavailable(session, monkeypatch):
         assert "Email is unavailable" in home.text and "blocks outbound SMTP" in home.text
         r = client.post("/settings/test-email", data={"csrf": client.cookies.get("gf_csrf")}, follow_redirects=True)
         assert "No test email was sent" in r.text
+
+
+# --------------------------------------------------------------------------
+# Review fixes: nothing is recorded as sent unless it was sent
+# --------------------------------------------------------------------------
+
+def _soon_match(session, state="notified"):
+    from datetime import date, timedelta
+
+    p = Project(name="P")
+    o = Opportunity(source="s", source_id="soon", title="Soon", close_date=(date.today() + timedelta(days=5)).isoformat())
+    session.add_all([p, o])
+    session.flush()
+    m = Match(project_id=p.id, opportunity_id=o.id, state=state)
+    session.add(m)
+    session.commit()
+    return m
+
+
+def test_reminders_are_not_recorded_while_email_is_unavailable(session, monkeypatch):
+    from grantforge import maintenance
+    from grantforge.db import AuditEvent
+
+    _soon_match(session)
+    monkeypatch.setattr(settings, "email_backend", "smtp")
+    monkeypatch.setattr(settings, "hosting_plan", "free")
+    assert maintenance.send_reminders() == 0
+    assert session.query(AuditEvent).filter_by(event="reminder_7").count() == 0
+    monkeypatch.setattr(settings, "email_backend", "console")
+    monkeypatch.setattr(settings, "hosting_plan", "")
+    assert maintenance.send_reminders() == 1  # sent once email works
+
+
+def test_failed_reminder_email_is_retried(session, monkeypatch):
+    from grantforge import maintenance
+    from grantforge.db import AuditEvent
+
+    _soon_match(session)
+
+    def boom(*_a, **_k):
+        raise OSError("connection reset")
+
+    monkeypatch.setattr(notify, "send_deadline_reminders", boom)
+    with pytest.raises(OSError):
+        maintenance.send_reminders()
+    assert session.query(AuditEvent).filter_by(event="reminder_7").count() == 0
+    monkeypatch.undo()
+    assert maintenance.send_reminders() == 1
+
+
+def test_budget_notice_is_recorded_only_after_it_was_sent(session, monkeypatch):
+    from grantforge import llm as gllm
+    from grantforge import maintenance
+    from grantforge.db import AuditEvent
+
+    monkeypatch.setattr(settings, "monthly_budget_usd", 1.0)
+    monkeypatch.setattr(gllm, "month_spend_usd", lambda: 2.0)
+
+    def boom(*_a, **_k):
+        raise OSError("connection reset")
+
+    monkeypatch.setattr(notify, "send_budget_notice", boom)
+    with pytest.raises(OSError):
+        maintenance.budget_notice()
+    tag = f"budget_cap_{utcnow():%Y-%m}"
+    assert session.query(AuditEvent).filter(AuditEvent.event.like("budget_cap_%")).count() == 0
+    monkeypatch.setattr(notify, "send_budget_notice", lambda spent: {"backend": "console"})
+    assert maintenance.budget_notice() is True
+    assert maintenance.budget_notice() is False  # once per month
+    assert session.query(AuditEvent).filter(AuditEvent.event.like("budget_cap_%")).count() == 1 and tag
+
+
+def test_mark_submitted_refuses_an_application_being_sent(session):
+    from fastapi.testclient import TestClient
+
+    from grantforge import main as webmain
+
+    m = _soon_match(session, state="submitting")
+    with TestClient(webmain.app, base_url="http://localhost") as client:
+        client.get("/")
+        r = client.post(f"/review/{m.id}/mark-submitted", data={"csrf": client.cookies.get("gf_csrf")})
+        assert r.status_code == 409
+        session.refresh(m)
+        assert m.state == "submitting"
+        m.state = "ready_for_manual_upload"
+        session.commit()
+        r = client.post(f"/review/{m.id}/mark-submitted", data={"csrf": client.cookies.get("gf_csrf"),
+                                                               "confirmation": "GRANT123"}, follow_redirects=False)
+        assert r.status_code == 303
+        session.refresh(m)
+        assert m.state == "submitted"

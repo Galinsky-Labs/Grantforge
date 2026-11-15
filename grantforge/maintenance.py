@@ -106,8 +106,15 @@ def _days_left(close_date: str) -> int | None:
 def send_reminders() -> int:
     from .notify import send_deadline_reminders
 
+    from .notify import email_unavailable_reason
+
     thresholds = settings.reminder_day_list
     if not thresholds:
+        return 0
+    reason = email_unavailable_reason()
+    if reason:
+        # Not recorded as sent, so the reminder goes out on the first day email works again.
+        log.warning("deadline reminders skipped: email is unavailable (%s)", reason)
         return 0
     with SessionLocal() as s:
         pending = s.scalars(select(Match).where(Match.state.in_(["drafted", "notified", "ready_for_manual_upload"]))).all()
@@ -128,7 +135,7 @@ def send_reminders() -> int:
             due.append((m, days))
             audit(s, tag, m.id, days_left=days)
         if due:
-            send_deadline_reminders(due)
+            send_deadline_reminders(due)  # raises on failure: the rollback leaves the reminders unrecorded
         s.commit()
         return len(due)
 
@@ -146,11 +153,16 @@ def budget_notice() -> bool:
     spent = month_spend_usd()
     if spent < settings.monthly_budget_usd:
         return False
+    from .notify import email_unavailable_reason
+
+    if email_unavailable_reason():
+        return False  # not recorded, so the notice is sent once email works
     tag = f"budget_cap_{date.today():%Y-%m}"
     with SessionLocal() as s:
         if s.scalar(select(AuditEvent).where(AuditEvent.event == tag)):
             return False
+        # Record only after the email went out; a failed send is retried on the next daily run.
+        send_budget_notice(spent)
         audit(s, tag, None, spent=round(spent, 2))
         s.commit()
-    send_budget_notice(spent)
     return True
