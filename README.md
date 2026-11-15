@@ -109,10 +109,19 @@ python scripts/run_pipeline.py --backup
 `render.yaml` is a Render Blueprint for one Docker web service; the database is Neon Postgres. Uploads and application packages are stored in the database as well, so nothing is lost when Render replaces the container on each deploy.
 
 1. In Neon, create a project in AWS us-east-2 (the Blueprint's `ohio` region is the same AWS region). Copy two connection strings from **Connect**: the pooled one (host contains `-pooler`) for `GF_DATABASE_URL`, and the direct one for `GF_DATABASE_URL_DIRECT`.
-2. In Render, choose **New → Blueprint**, select this repository, and fill in the values Render asks for: the two database URLs, `ANTHROPIC_API_KEY`, `GF_UI_PASSWORD`, `GF_NOTIFY_TO`, `GF_EMAIL_FROM`, `GF_SMTP_USER` and `GF_SMTP_PASSWORD` (for Gmail, an App Password). `GF_APP_SECRET` is generated for you.
+2. In Render, choose **New → Blueprint**, select this repository, and fill in the values Render asks for: the two database URLs, `ANTHROPIC_API_KEY`, `GF_UI_PASSWORD`, `GF_NOTIFY_TO`, `GF_EMAIL_FROM`, `GF_SMTP_USER` and `GF_SMTP_PASSWORD` (for Gmail, an App Password; on the Free plan use `RESEND_API_KEY` instead, see below). `GF_APP_SECRET` is generated for you.
 3. Open the service's address, sign in, and check **Applicant settings → Setup status**. Every line should be green or amber; press **Send a test email**.
 
-The Blueprint uses the Starter plan on purpose: a Free service is stopped after 15 minutes without a visitor, which stops the background worker in the middle of a run, and Free services cannot open SMTP connections. The public address comes from Render (`RENDER_EXTERNAL_URL`); set `GF_BASE_URL` only for a custom domain. While nothing is running, the worker does not query the database (it is woken when a job is queued), so Neon can suspend its compute between runs.
+### Free plan
+
+The live service runs on Render's Free plan, which has two limits. GrantForge handles both:
+
+* **The instance sleeps** after 15 minutes without a visitor and wakes, in about a minute, on the next visit. While a job runs, the worker requests the app's own public `/health` address every `GF_KEEPALIVE_SECONDS` (600 on Render) so the instance stays awake until the job finishes; when idle it sends nothing, so the instance can sleep. If a run is interrupted anyway (a deploy, a restart), its progress is already in the database: the job records each finished stage (profile, discover, score, draft, notify), every draft saves its plan and each finished section and fact check, and on the next start the worker re-queues the job and continues from the first unfinished step. A job interrupted `GF_JOB_MAX_ATTEMPTS` times (default 5) is failed instead of retried. A submission is never retried (see above). Autopilot runs and deadline reminders only happen while the instance is awake.
+* **Outbound SMTP is blocked.** Set `GF_EMAIL_BACKEND=resend`, `RESEND_API_KEY` and `GF_EMAIL_FROM` (an address on a domain verified in [Resend](https://resend.com)); Resend sends over HTTPS. Until email works, the dashboard says so, drafts are listed there instead of emailed, and they are emailed on a later run once email works. Nothing is lost.
+
+Set `GF_HOSTING_PLAN=free` so the Setup status page explains these limits. The Starter plan (paid) removes both, and SMTP then works with the `GF_SMTP_*` values.
+
+The public address comes from Render (`RENDER_EXTERNAL_URL`); set `GF_BASE_URL` only for a custom domain. While nothing is running, the worker does not query the database (it is woken when a job is queued), so Neon can suspend its compute between runs.
 
 ## Deploy on your own server with HTTPS
 

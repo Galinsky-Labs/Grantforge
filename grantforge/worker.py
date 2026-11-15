@@ -16,13 +16,16 @@ its compute when nothing is happening instead of being kept awake all month.
 """
 from __future__ import annotations
 
+import copy
 import logging
 import threading
 import time
 import traceback
 from datetime import timedelta
 
+import httpx
 from sqlalchemy import select, update
+from sqlalchemy.orm.attributes import flag_modified
 
 from .config import settings
 from .db import AuditEvent, Job, Match, Project, SessionLocal, audit, utcnow
@@ -51,7 +54,7 @@ def claim_next_job() -> int | None:
     with SessionLocal() as s:
         for job_id in s.scalars(select(Job.id).where(Job.status == "queued").order_by(Job.id).limit(5)).all():
             res = s.execute(update(Job).where(Job.id == job_id, Job.status == "queued")
-                            .values(status="running", started_at=utcnow()))
+                            .values(status="running", started_at=utcnow(), attempts=Job.attempts + 1))
             s.commit()
             if res.rowcount == 1:
                 return job_id
@@ -69,11 +72,21 @@ def run_job(job_id: int) -> None:
             job.append_log(line)
             s.commit()
 
+        def save_checkpoint(cp: dict) -> None:
+            job.checkpoint = copy.deepcopy(cp)
+            flag_modified(job, "checkpoint")
+            s.commit()
+
         try:
             project = s.get(Project, job.project_id) if job.project_id else None
             payload = job.payload or {}
+            if job.project_id and project is None:
+                raise RuntimeError("The project for this job no longer exists")
+            if (job.attempts or 0) > 1:
+                log_fn(f"Attempt {job.attempts} of at most {settings.job_max_attempts}: continuing an interrupted run")
             if job.kind == "pipeline":
-                result = run_pipeline(s, project, log_fn, rebuild_profile=payload.get("rebuild_profile", False))
+                result = run_pipeline(s, project, log_fn, rebuild_profile=payload.get("rebuild_profile", False),
+                                      checkpoint=dict(job.checkpoint or {}), save_checkpoint=save_checkpoint)
                 log_fn(f"Pipeline finished: {result}")
             elif job.kind == "profile":
                 run_profile(s, project, log_fn)
@@ -118,6 +131,43 @@ def run_job(job_id: int) -> None:
             s.commit()
 
 
+class keep_awake:
+    """While a job runs, request this app's own public /health address every GF_KEEPALIVE_SECONDS.
+
+    A Render Free instance is stopped after 15 minutes without an inbound request, which would stop the worker
+    thread in the middle of a run. The request goes out through the public address, so it counts as inbound
+    traffic. Nothing is sent while the worker is idle, so the instance still sleeps when there is no work.
+    Interrupted runs are resumed anyway (see recover_stale_jobs); this only avoids the interruption."""
+
+    def __init__(self) -> None:
+        self._done = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    @staticmethod
+    def url() -> str | None:
+        base = settings.base_url or ""
+        if settings.keepalive_seconds <= 0 or not base.startswith("https://"):
+            return None
+        return f"{base}/health"
+
+    def _run(self, url: str) -> None:
+        while not self._done.wait(settings.keepalive_seconds):
+            try:
+                httpx.get(url, timeout=20)
+            except Exception as exc:  # a failed ping only means the next one may be needed
+                log.debug("keep-awake request failed: %s", exc)
+
+    def __enter__(self):
+        url = self.url()
+        if url:
+            self._thread = threading.Thread(target=self._run, args=(url,), name="grantforge-keepawake", daemon=True)
+            self._thread.start()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self._done.set()
+
+
 def recover_stale_jobs(older_than: timedelta | None = STALE_AFTER) -> None:
     """Jobs left 'running' by a stopped process. Pipeline-type jobs are re-queued; a submit job is
     marked failed instead, because it may already have sent an email and must not send twice.
@@ -140,9 +190,15 @@ def recover_stale_jobs(older_than: timedelta | None = STALE_AFTER) -> None:
                 if m is not None and m.state == "submitting":
                     m.state = "failed"
                     m.submission_result = {"status": "failed", "error": j.error}
+            elif (j.attempts or 0) >= settings.job_max_attempts:
+                j.status = "failed"
+                j.finished_at = utcnow()
+                j.error = (f"Stopped after {j.attempts} interrupted attempts (GF_JOB_MAX_ATTEMPTS="
+                           f"{settings.job_max_attempts}). Work that finished is kept; start the run again to continue.")
+                j.append_log("Not re-queued: too many interrupted attempts")
             else:
                 j.status = "queued"
-                j.append_log("Re-queued after an interrupted run")
+                j.append_log("Interrupted (restart, deploy or a sleeping instance); re-queued to resume where it stopped")
         s.commit()
 
 
@@ -185,7 +241,8 @@ def _loop() -> None:
                 last_poll = time.time()
                 job_id = claim_next_job()
                 if job_id:
-                    run_job(job_id)
+                    with keep_awake():
+                        run_job(job_id)
                     _wake.set()  # there may be more behind it
                     continue
             if maintenance.due_today():

@@ -4,8 +4,9 @@
 <h1>Applicant settings</h1>
 {% if request.query_params.get('saved') %}<div class="notice ok">Saved.</div>{% endif %}
 {% set email = request.query_params.get('email') %}
-{% if email == 'failed' %}<div class="notice warn">The test email could not be sent. Check the GF_SMTP_* settings and the server log.</div>
+{% if email == 'failed' %}<div class="notice warn">The test email could not be sent. Check the email settings in the table below and the server log.</div>
 {% elif email == 'console' %}<div class="notice warn">The console email backend wrote the test email to the server's disk. It was not sent to {{ settings.notify_to }}.</div>
+{% elif email == 'unavailable' %}<div class="notice warn">Email is unavailable: {{ email_unavailable_reason() }}. No test email was sent.</div>
 {% elif email %}<div class="notice ok">Test email sent to {{ settings.notify_to }}.</div>{% endif %}
 
 <section class="card">

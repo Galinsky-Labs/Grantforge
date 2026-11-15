@@ -90,6 +90,16 @@ class Settings:
     # Safety-net interval at which an idle worker checks the database for jobs it was not woken for.
     # 0 = choose by database: 2 s for SQLite, 1 hour for Postgres (so Neon can suspend when idle).
     worker_poll_seconds: float = field(default_factory=lambda: float(os.environ.get("GF_WORKER_POLL_SECONDS", "0") or 0))
+    # A job started this many times (each restart re-queues an interrupted job) is failed instead of retried, so a
+    # job that crashes the process cannot loop forever.
+    job_max_attempts: int = field(default_factory=lambda: _int("GF_JOB_MAX_ATTEMPTS", 5))
+    # While a job runs, request the app's own public /health address this often (seconds; 0 = off). On a host that
+    # stops idle instances (Render Free: 15 minutes without an inbound request) this keeps the instance awake until
+    # the job finishes. Off when idle, so the instance can still sleep. Default: 600 on Render, otherwise off.
+    keepalive_seconds: int = field(default_factory=lambda: _int("GF_KEEPALIVE_SECONDS", 600 if os.environ.get("RENDER") else 0))
+    # The hosting plan, only used to explain limits on the Setup status page: "free" (Render Free: sleeps when idle,
+    # outbound SMTP ports blocked) or blank/anything else (no such limits).
+    hosting_plan: str = field(default_factory=lambda: os.environ.get("GF_HOSTING_PLAN", "").strip().lower())
     trust_proxy: bool = field(default_factory=lambda: _bool("GF_TRUST_PROXY", False))  # true only behind the bundled Caddy
 
     # --- operations --------------------------------------------------------
@@ -106,7 +116,10 @@ class Settings:
     include_forecasted: bool = field(default_factory=lambda: _bool("GF_INCLUDE_FORECASTED", True))
 
     # --- email -------------------------------------------------------------
-    email_backend: str = field(default_factory=lambda: os.environ.get("GF_EMAIL_BACKEND", "console"))  # console|smtp
+    email_backend: str = field(default_factory=lambda: os.environ.get("GF_EMAIL_BACKEND", "console").strip().lower())  # console|smtp|resend
+    # Resend (https://resend.com) sends over HTTPS, so it works where outbound SMTP ports are blocked (Render Free).
+    resend_api_key: str = field(default_factory=lambda: os.environ.get("RESEND_API_KEY", ""))
+    resend_api_url: str = field(default_factory=lambda: os.environ.get("GF_RESEND_API_URL", "https://api.resend.com").rstrip("/"))
     smtp_host: str = field(default_factory=lambda: os.environ.get("GF_SMTP_HOST", ""))
     smtp_port: int = field(default_factory=lambda: _int("GF_SMTP_PORT", 587))
     smtp_user: str = field(default_factory=lambda: os.environ.get("GF_SMTP_USER", ""))

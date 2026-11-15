@@ -34,7 +34,7 @@ def test_v01_database_is_upgraded_in_place(tmp_path):
     assert "is_attachment" in {c["name"] for c in insp.get_columns("documents")}
     with eng.connect() as conn:
         assert conn.execute(text("SELECT name FROM projects")).scalar() == "Old project"
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0003"
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0004"
 
 
 def test_models_match_migrations(tmp_path):

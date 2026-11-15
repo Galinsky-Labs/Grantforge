@@ -84,16 +84,28 @@ def run_draft(session: Session, project: Project, log_fn=print, limit: int | Non
 
 
 def run_notify(session: Session, project: Project, matches: list[Match] | None = None, log_fn=print) -> dict | None:
+    """Email the review links. A failure to send (no email service, SMTP blocked by the host) is logged and
+    leaves the drafts in the 'drafted' state, visible on the dashboard and notified on a later run; it does not
+    fail the job that wrote them."""
+    from .notify import email_unavailable_reason
+
     if matches is None:
         matches = session.scalars(select(Match).where(Match.project_id == project.id, Match.state == "drafted")).all()
     matches = [m for m in matches if m.state == "drafted"]
     if not matches:
         log_fn("Nothing new to notify about")
         return None
-    if not settings.notify_to:
-        log_fn("GF_NOTIFY_TO is not set; skipping email (drafts are visible in the dashboard)")
+    reason = email_unavailable_reason()
+    if reason:
+        log_fn(f"Email is not available ({reason}); the {len(matches)} draft(s) are on the dashboard and will be "
+               "emailed on a later run once email works")
         return None
-    result = notify_drafts_ready(matches, project.profile.get("project_name") if project.profile else project.name)
+    try:
+        result = notify_drafts_ready(matches, project.profile.get("project_name") if project.profile else project.name)
+    except Exception as exc:
+        log.exception("notification email failed")
+        log_fn(f"The notification email could not be sent ({exc}); the {len(matches)} draft(s) are on the dashboard")
+        return None
     for m in matches:
         m.state = "notified"
         m.notified_at = utcnow()
@@ -103,13 +115,46 @@ def run_notify(session: Session, project: Project, matches: list[Match] | None =
     return result
 
 
-def run_pipeline(session: Session, project: Project, log_fn=print, rebuild_profile: bool = False) -> dict:
-    if rebuild_profile or not project.profile:
-        run_profile(session, project, log_fn)
-    opportunities = run_discover(session, project, log_fn)
+def run_pipeline(session: Session, project: Project, log_fn=print, rebuild_profile: bool = False,
+                 checkpoint: dict | None = None, save_checkpoint=None) -> dict:
+    """Profile → discover → score → draft → notify.
+
+    ``checkpoint`` is the job's saved progress ({"done": [stage, ...], "opportunity_ids": [...]}). Each finished
+    stage is recorded through ``save_checkpoint(checkpoint)`` (which commits it to the database), so a run that is
+    interrupted (a deploy, a restart, a free instance going to sleep) is resumed by the worker from the first
+    unfinished stage. Scoring and drafting are themselves resumable: scored matches are not scored again, drafted
+    matches leave the shortlist, and a half-written draft continues from its last finished section.
+    """
+    cp = checkpoint if checkpoint is not None else {}
+    done: list[str] = list(cp.get("done") or [])
+
+    def mark(stage: str, **extra) -> None:
+        done.append(stage)
+        cp["done"] = list(done)
+        cp.update(extra)
+        if save_checkpoint:
+            save_checkpoint(cp)
+
+    if done:
+        log_fn(f"Resuming an interrupted run; already finished: {', '.join(done)}")
+    if "profile" not in done:
+        if rebuild_profile or not project.profile:
+            run_profile(session, project, log_fn)
+        mark("profile")
+    if "discover" not in done:
+        opportunities = run_discover(session, project, log_fn)
+        mark("discover", opportunity_ids=[o.id for o in opportunities])
+    else:
+        ids = cp.get("opportunity_ids") or []
+        opportunities = session.scalars(select(Opportunity).where(Opportunity.id.in_(ids))).all() if ids else []
     matches = run_score(session, project, opportunities, log_fn)
+    if "score" not in done:
+        mark("score")
     drafted = run_draft(session, project, log_fn)
-    run_notify(session, project, drafted, log_fn)
+    mark("draft")
+    # Notify every draft of this project not yet emailed, including drafts finished before an interruption.
+    run_notify(session, project, None, log_fn)
+    mark("notify")
     return {
         "opportunities": len(opportunities),
         "shortlisted": sum(1 for m in matches if m.state in {"shortlisted", "drafted", "notified"}),

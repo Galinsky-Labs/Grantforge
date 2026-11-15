@@ -5,6 +5,7 @@
 <p>{% if j.project %}<a href="/projects/{{ j.project.id }}">← {{ j.project.name }}</a>{% else %}<a href="/">← Projects</a>{% endif %}</p>
 <h1>Job #{{ j.id }} · {{ j.kind }} <span class="chip {{ j.status }}">{{ j.status }}</span></h1>
 <p class="muted">Created {{ j.created_at.strftime('%Y-%m-%d %H:%M:%S') }}{% if j.started_at %} · started {{ j.started_at.strftime('%H:%M:%S') }}{% endif %}{% if j.finished_at %} · finished {{ j.finished_at.strftime('%H:%M:%S') }}{% endif %}</p>
+{% if j.attempts and j.attempts > 1 %}<p class="muted">Attempt {{ j.attempts }}: an earlier attempt was interrupted (restart, deploy or a sleeping server) and this one continued from the last finished step{% if j.checkpoint and j.checkpoint.done %} (finished: {{ j.checkpoint.done|join(', ') }}){% endif %}.</p>{% endif %}
 {% if j.error %}<div class="notice warn"><pre>{{ j.error }}</pre></div>{% endif %}
 <pre class="log">{{ j.log }}</pre>
 {% endblock %}

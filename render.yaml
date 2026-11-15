@@ -7,9 +7,11 @@ services:
   - type: web
     name: grantforge
     runtime: docker
-    # Starter, not Free: a Free service is stopped after 15 minutes without a visitor, which stops the
-    # background worker in the middle of a run, and Free services cannot open SMTP connections.
-    plan: starter
+    # The live service runs on Free. Free works, with limits that GrantForge handles (see README, "Free plan"):
+    # the instance sleeps after 15 minutes without a visitor (the worker keeps it awake while a job runs and
+    # resumes an interrupted run when it wakes), and outbound SMTP is blocked (use GF_EMAIL_BACKEND=resend).
+    # Starter removes both limits; changing the plan is the owner's decision because it is paid.
+    plan: free
     region: ohio            # same AWS region as the Neon project (us-east-2)
     healthCheckPath: /health
     autoDeploy: true
@@ -29,9 +31,15 @@ services:
         generateValue: true
       - key: GF_TRUST_PROXY           # Render's proxy supplies the visitor's address
         value: "true"
+      - key: GF_HOSTING_PLAN          # "free" explains the Free plan's limits on the Setup status page
+        value: free
       # ----- email -----
+      # On Free, SMTP is blocked: set GF_EMAIL_BACKEND=resend and RESEND_API_KEY (and GF_EMAIL_FROM on a domain
+      # verified in Resend). On Starter, smtp with the GF_SMTP_* values below works.
       - key: GF_EMAIL_BACKEND
         value: smtp
+      - key: RESEND_API_KEY           # from resend.com -> API Keys; only used when GF_EMAIL_BACKEND=resend
+        sync: false
       - key: GF_NOTIFY_TO             # where review links and reminders are sent
         sync: false
       - key: GF_EMAIL_FROM            # the From address; usually the same as GF_SMTP_USER
